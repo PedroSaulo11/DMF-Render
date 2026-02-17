@@ -750,7 +750,7 @@ class DataProcessor {
         const header = [
             'Fornecedor',
             'Data',
-            'DescriÃ§Ã£o',
+            'DESSCRI\u00C7\u00C3O',
             'Valor',
             'Centro de Custo',
             'Categoria',
@@ -807,7 +807,7 @@ class DataProcessor {
                 // ETL: Mapeamento conforme cÃ³digo Conta Azul original
                 // Identificar headers disponÃ­veis
                 const headers = Object.keys(rows[0] || {});
-                const possiveisDescricoes = ["DescriÃ§Ã£o", "Historico", "HistÃ³rico", "ObservaÃ§Ã£o", "Observacao", "Memo"];
+                const possiveisDescricoes = ["DescriÃ§Ã£o", "DESCRI\u00C7\u00C3O", "DESSCRI\u00C7\u00C3O", "Historico", "HistÃ³rico", "ObservaÃ§Ã£o", "Observacao", "Memo"];
                 let campoDescricao = possiveisDescricoes.find(c => headers.includes(c));
 
                 console.log('Headers encontrados:', headers);
@@ -1118,7 +1118,7 @@ class DataProcessor {
         const header = [
             'Fornecedor',
             'Data',
-            'DescriÃ§Ã£o',
+            'DESSCRI\u00C7\u00C3O',
             'Valor',
             'Categoria',
             'Centro de Custo',
@@ -3115,7 +3115,7 @@ class UIManager {
                             <th>Centro de Custo</th>
                             <th>Categoria</th>
                             <th>Status</th>
-                            <th>AÃ§Ãµes</th>
+                            <th>Ações</th>
                             <th>Assinatura</th>
                             <th>ID da Assinatura</th>
                         </tr>
