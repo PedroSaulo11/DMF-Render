@@ -14,6 +14,7 @@
     "smoke:health": "node scripts/smoke-health.js",
     "smoke:multiuser": "node scripts/smoke-multiuser.js",
     "smoke:prod": "node scripts/smoke-prod.js",
+    "check:baseline": "npm run check:syntax && npm run check:readiness && npm run smoke:health",
     "check:phase3": "npm run check:syntax && npm run check:security && npm run check:readiness && npm run smoke:health"
   },
   "dependencies": {

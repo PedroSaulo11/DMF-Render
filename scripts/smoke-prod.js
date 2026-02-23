@@ -83,11 +83,31 @@ async function readSseOnce(url, timeoutMs = 7000) {
   }
 }
 
+async function readSseWithRetry(url, { timeoutMs = 7000, retries = 3, retryDelayMs = 1200 } = {}) {
+  let lastError = null;
+  for (let attempt = 1; attempt <= retries; attempt += 1) {
+    try {
+      return await readSseOnce(url, timeoutMs);
+    } catch (error) {
+      lastError = error;
+      const msg = error && error.message ? error.message : String(error);
+      console.warn(`[smoke] sse attempt ${attempt}/${retries} failed: ${msg}`);
+      if (attempt < retries) {
+        await sleep(retryDelayMs);
+      }
+    }
+  }
+  throw lastError || new Error('SSE retry exhausted');
+}
+
 async function main() {
   const base = baseUrl();
   const username = mustEnv('TEST_USERNAME', '');
   const password = mustEnv('TEST_PASSWORD', '');
   const company = mustEnv('TEST_COMPANY', 'DMF');
+  const sseTimeoutMs = Number(mustEnv('SSE_TIMEOUT_MS', '12000')) || 12000;
+  const sseRetries = Number(mustEnv('SSE_RETRIES', '3')) || 3;
+  const sseRetryDelayMs = Number(mustEnv('SSE_RETRY_DELAY_MS', '1200')) || 1200;
 
   console.log(`[smoke] base=${base}`);
 
@@ -159,7 +179,11 @@ async function main() {
 
     // SSE endpoint: must connect and emit a flow_update event with type=connected
     const sseUrl = `${base}/api/flow-payments/stream?company=${encodeURIComponent(company)}&access_token=${encodeURIComponent(token)}`;
-    const evt = await readSseOnce(sseUrl, 7000);
+    const evt = await readSseWithRetry(sseUrl, {
+      timeoutMs: sseTimeoutMs,
+      retries: sseRetries,
+      retryDelayMs: sseRetryDelayMs
+    });
     assert(evt.event === 'flow_update', `SSE first event expected flow_update, got ${evt.event}`);
     assert(evt.data && evt.data.type === 'connected', `SSE payload expected type=connected, got ${JSON.stringify(evt.data)}`);
     console.log('[smoke] sse connected ok');
@@ -176,4 +200,3 @@ main().catch((err) => {
   console.error('[smoke] FAIL', err && err.stack ? err.stack : err);
   process.exit(1);
 });
-

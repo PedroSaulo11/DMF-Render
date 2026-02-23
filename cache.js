@@ -1,10 +1,18 @@
 const DEFAULT_TTL_SECONDS = Number(process.env.CACHE_TTL_SECONDS || 60);
 let redisClient = null;
 let redisReady = false;
+const REDIS_ANY_FEATURE_ENABLED = [
+  'ENABLE_REDIS_CACHE',
+  'ENABLE_DISTRIBUTED_RATE_LIMIT',
+  'ENABLE_PUBSUB_SSE'
+].some((name) => String(process.env[name] || 'false').trim().toLowerCase() === 'true');
 
 const memoryCache = new Map();
 
 async function getRedisClient() {
+  if (!REDIS_ANY_FEATURE_ENABLED) {
+    return null;
+  }
   if (redisClient || process.env.REDIS_URL === undefined || process.env.REDIS_URL === '') {
     return redisClient;
   }
@@ -22,6 +30,10 @@ async function getRedisClient() {
     redisReady = false;
   }
   return redisClient;
+}
+
+function isRedisReady() {
+  return !!(redisClient && redisReady);
 }
 
 async function cacheGet(key) {
@@ -65,4 +77,6 @@ module.exports = {
   cacheGet,
   cacheSet,
   withCache,
+  getRedisClient,
+  isRedisReady,
 };

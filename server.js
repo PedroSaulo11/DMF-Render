@@ -14,7 +14,7 @@ const rateLimit = require('express-rate-limit');
 const helmet = require('helmet');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const { withCache } = require('./cache');
+const { withCache, getRedisClient, isRedisReady } = require('./cache');
 const {
   initDb,
   isDbReady,
@@ -61,6 +61,11 @@ const {
   replaceRoles,
   getUserSession,
   setUserSessionRevokedAfter,
+  createUserRefreshSession,
+  getUserRefreshSession,
+  rotateUserRefreshSession,
+  revokeUserRefreshSessionsByUser,
+  revokeUserRefreshSessionsByFamily,
   insertWebhook,
   validateDbSchema
 } = require('./db');
@@ -83,6 +88,15 @@ function normalizeCompany(value) {
 
 function normalizeRole(value) {
   return String(value || '').trim().toLowerCase();
+}
+
+function envFlag(name, fallback = false) {
+  const raw = process.env[name];
+  if (raw === undefined || raw === null || raw === '') return !!fallback;
+  const normalized = String(raw).trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) return true;
+  if (['0', 'false', 'no', 'off'].includes(normalized)) return false;
+  return !!fallback;
 }
 
 async function isAllowedRole(role) {
@@ -155,10 +169,145 @@ const TOKEN_CACHE_TTL_MS = Number(process.env.TOKEN_CACHE_TTL_MS || 30000);
 let lastTokenLoadAt = 0;
 const CRON_SECRET = process.env.CRON_SECRET || '';
 const DB_SCHEMA_STRICT = process.env.DB_SCHEMA_STRICT === 'true';
+const FEATURE_FLAGS = Object.freeze({
+  enable_redis_cache: envFlag('ENABLE_REDIS_CACHE', false),
+  enable_distributed_rate_limit: envFlag('ENABLE_DISTRIBUTED_RATE_LIMIT', false),
+  enable_pubsub_sse: envFlag('ENABLE_PUBSUB_SSE', false),
+  enable_strict_api_only_auth: envFlag('ENABLE_STRICT_API_ONLY_AUTH', false),
+  enable_httponly_session: envFlag('ENABLE_HTTPONLY_SESSION', false),
+});
 const runtimeStats = {
   conflictsTotal: 0,
   lastConflictAt: null
 };
+
+function strictApiOnlyAuthEnabled() {
+  return FEATURE_FLAGS.enable_strict_api_only_auth === true;
+}
+
+function inMemoryUserFallbackEnabled() {
+  return !strictApiOnlyAuthEnabled();
+}
+
+const ACCESS_TOKEN_EXPIRES_IN = process.env.ACCESS_TOKEN_EXPIRES_IN || '48h';
+const USER_REFRESH_EXPIRES_DAYS = Number(process.env.USER_REFRESH_EXPIRES_DAYS || 30);
+const ACCESS_COOKIE_NAME = process.env.ACCESS_COOKIE_NAME || 'dmf_access_token';
+const REFRESH_COOKIE_NAME = process.env.REFRESH_COOKIE_NAME || 'dmf_refresh_token';
+
+function httpOnlySessionEnabled() {
+  return FEATURE_FLAGS.enable_httponly_session === true;
+}
+
+function parseCookies(req) {
+  const raw = req.headers?.cookie;
+  const out = {};
+  if (!raw) return out;
+  for (const pair of String(raw).split(';')) {
+    const idx = pair.indexOf('=');
+    if (idx <= 0) continue;
+    const key = pair.slice(0, idx).trim();
+    const value = pair.slice(idx + 1).trim();
+    if (!key) continue;
+    try {
+      out[key] = decodeURIComponent(value);
+    } catch (_) {
+      out[key] = value;
+    }
+  }
+  return out;
+}
+
+function serializeCookie(name, value, options = {}) {
+  const parts = [`${name}=${encodeURIComponent(value)}`];
+  if (options.maxAge != null) parts.push(`Max-Age=${Math.max(0, Number(options.maxAge) || 0)}`);
+  if (options.domain) parts.push(`Domain=${options.domain}`);
+  parts.push(`Path=${options.path || '/'}`);
+  if (options.expires instanceof Date) parts.push(`Expires=${options.expires.toUTCString()}`);
+  if (options.httpOnly !== false) parts.push('HttpOnly');
+  if (options.secure !== false) parts.push('Secure');
+  if (options.sameSite) parts.push(`SameSite=${options.sameSite}`);
+  return parts.join('; ');
+}
+
+function setCookie(res, name, value, options = {}) {
+  const prev = res.getHeader('Set-Cookie');
+  const next = serializeCookie(name, value, options);
+  if (!prev) {
+    res.setHeader('Set-Cookie', [next]);
+    return;
+  }
+  const list = Array.isArray(prev) ? prev : [String(prev)];
+  list.push(next);
+  res.setHeader('Set-Cookie', list);
+}
+
+function clearAuthCookies(res) {
+  setCookie(res, ACCESS_COOKIE_NAME, '', { maxAge: 0, path: '/', sameSite: 'Lax' });
+  setCookie(res, REFRESH_COOKIE_NAME, '', { maxAge: 0, path: '/api/auth', sameSite: 'Strict' });
+}
+
+function signUserAccessToken(user) {
+  return jwt.sign(
+    { id: user.id, username: user.username, email: user.email, role: user.role, name: user.name || null },
+    JWT_SECRET,
+    { expiresIn: ACCESS_TOKEN_EXPIRES_IN }
+  );
+}
+
+function signUserRefreshToken({ user, tokenId, familyId, expiresIn }) {
+  return jwt.sign(
+    {
+      id: user.id,
+      typ: 'refresh',
+      sid: tokenId,
+      fid: familyId
+    },
+    JWT_SECRET,
+    { expiresIn }
+  );
+}
+
+function getRequestUserAgent(req) {
+  return req.headers?.['user-agent'] || null;
+}
+
+function getClientIp(req) {
+  return req.ip || req.headers?.['x-forwarded-for'] || null;
+}
+
+async function issueHttpOnlySession(res, req, user, { familyId = null } = {}) {
+  const accessToken = signUserAccessToken(user);
+  const tokenId = crypto.randomUUID();
+  const refreshFamilyId = familyId || crypto.randomUUID();
+  const refreshToken = signUserRefreshToken({
+    user,
+    tokenId,
+    familyId: refreshFamilyId,
+    expiresIn: `${USER_REFRESH_EXPIRES_DAYS}d`
+  });
+  const refreshExpiresAt = new Date(Date.now() + USER_REFRESH_EXPIRES_DAYS * 24 * 60 * 60 * 1000);
+  if (isDbReady()) {
+    await createUserRefreshSession({
+      tokenId,
+      userId: user.id,
+      familyId: refreshFamilyId,
+      expiresAt: refreshExpiresAt,
+      userAgent: getRequestUserAgent(req),
+      ip: getClientIp(req)
+    });
+  }
+  setCookie(res, ACCESS_COOKIE_NAME, accessToken, {
+    maxAge: 48 * 60 * 60,
+    path: '/',
+    sameSite: 'Lax'
+  });
+  setCookie(res, REFRESH_COOKIE_NAME, refreshToken, {
+    maxAge: USER_REFRESH_EXPIRES_DAYS * 24 * 60 * 60,
+    path: '/api/auth',
+    sameSite: 'Strict'
+  });
+  return { accessToken, refreshToken, familyId: refreshFamilyId, tokenId };
+}
 
 async function loadRolePermissions(role) {
   const normalized = normalizeRole(role);
@@ -375,6 +524,81 @@ const importLimiter = rateLimit({
   legacyHeaders: false,
 });
 
+let distributedRateLimitWarned = false;
+
+function distributedRateLimit({ keyPrefix, windowMs, max, message }) {
+  return async (req, res, next) => {
+    if (!FEATURE_FLAGS.enable_distributed_rate_limit) return next();
+    try {
+      const redis = await getRedisClient();
+      if (!redis || !isRedisReady()) {
+        if (!distributedRateLimitWarned) {
+          distributedRateLimitWarned = true;
+          logger.warn('Distributed rate limit enabled but Redis is unavailable; using local limiter fallback.');
+        }
+        return next();
+      }
+
+      const key = `rl:${keyPrefix}:${req.ip || 'unknown'}`;
+      const result = await redis.eval(
+        "local c=redis.call('INCR',KEYS[1]); if c==1 then redis.call('PEXPIRE',KEYS[1],ARGV[1]) end; local ttl=redis.call('PTTL',KEYS[1]); return {c,ttl}",
+        {
+          keys: [key],
+          arguments: [String(windowMs)]
+        }
+      );
+
+      const count = Number(Array.isArray(result) ? result[0] : 0) || 0;
+      let ttlMs = Number(Array.isArray(result) ? result[1] : 0) || 0;
+      if (ttlMs < 0) ttlMs = windowMs;
+      const resetSeconds = Math.max(1, Math.ceil(ttlMs / 1000));
+      const remaining = Math.max(0, max - count);
+
+      res.setHeader('RateLimit-Limit', String(max));
+      res.setHeader('RateLimit-Remaining', String(remaining));
+      res.setHeader('RateLimit-Reset', String(resetSeconds));
+
+      if (count > max) {
+        return res.status(429).json({ error: String(message || 'Too many requests, please try again later.') });
+      }
+      return next();
+    } catch (error) {
+      logger.warn('Distributed rate limit check failed; continuing with local limiter.', {
+        error: error.message
+      });
+      return next();
+    }
+  };
+}
+
+const distributedLimiter = distributedRateLimit({
+  keyPrefix: 'api',
+  windowMs: API_RATE_LIMIT_WINDOW_MS,
+  max: API_RATE_LIMIT_MAX,
+  message: 'Too many requests from this IP, please try again later.'
+});
+
+const distributedAuthLimiter = distributedRateLimit({
+  keyPrefix: 'auth',
+  windowMs: 15 * 60 * 1000,
+  max: Number(process.env.AUTH_RATE_LIMIT_MAX || 5),
+  message: 'Too many authentication attempts, please try again later.'
+});
+
+const distributedCriticalLimiter = distributedRateLimit({
+  keyPrefix: 'critical',
+  windowMs: 15 * 60 * 1000,
+  max: Number(process.env.CRITICAL_RATE_LIMIT_MAX || 20),
+  message: 'Too many critical requests from this IP, please try again later.'
+});
+
+const distributedImportLimiter = distributedRateLimit({
+  keyPrefix: 'import',
+  windowMs: 15 * 60 * 1000,
+  max: Number(process.env.IMPORT_RATE_LIMIT_MAX || 30),
+  message: 'Too many import requests from this IP, please try again later.'
+});
+
 // Security: Helmet for security headers
 app.use(helmet({
   contentSecurityPolicy: {
@@ -391,8 +615,8 @@ app.use(helmet({
 }));
 
 // Security: Apply rate limiting
-app.use('/api/', limiter);
-app.use('/api/auth/', authLimiter);
+app.use('/api/', distributedLimiter, limiter);
+app.use('/api/auth/', distributedAuthLimiter, authLimiter);
 
 // Security: CORS configuration
 const corsOrigins = process.env.CORS_ORIGINS
@@ -620,7 +844,8 @@ async function loadSecretsFromSecretManager() {
     { envVar: 'DATABASE_URL', secretName: process.env.SECRET_DATABASE_URL || 'DATABASE_URL', required: true },
     { envVar: 'SIGNATURE_SECRET', secretName: process.env.SECRET_SIGNATURE_SECRET || 'SIGNATURE_SECRET', required: true },
     { envVar: 'EVENT_WEBHOOK_SECRET', secretName: process.env.SECRET_EVENT_WEBHOOK_SECRET || 'EVENT_WEBHOOK_SECRET', required: false },
-    { envVar: 'COBLI_API_TOKEN', secretName: process.env.SECRET_COBLI_API_TOKEN || 'COBLI_API_TOKEN', required: false }
+    { envVar: 'COBLI_API_TOKEN', secretName: process.env.SECRET_COBLI_API_TOKEN || 'COBLI_API_TOKEN', required: false },
+    { envVar: 'REDIS_URL', secretName: process.env.SECRET_REDIS_URL || 'REDIS_URL', required: false }
   ];
 
   const missing = [];
@@ -997,7 +1222,9 @@ function validateRequest(validations) {
 // Security: Authentication middleware
 async function authenticateToken(req, res, next) {
   const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
+  const bearerToken = authHeader && authHeader.split(' ')[1];
+  const cookieToken = httpOnlySessionEnabled() ? parseCookies(req)[ACCESS_COOKIE_NAME] : null;
+  const token = bearerToken || cookieToken; // Bearer TOKEN or HttpOnly cookie
 
   if (!token) {
     logger.warn('Access attempt without token', { ip: req.ip, path: req.path });
@@ -1035,7 +1262,8 @@ async function authenticateToken(req, res, next) {
 // SSE auth: allow token via query param to support EventSource
 async function authenticateTokenFromQuery(req, res, next) {
   const authHeader = req.headers['authorization'];
-  const token = (authHeader && authHeader.split(' ')[1]) || req.query?.token || req.query?.access_token;
+  const cookieToken = httpOnlySessionEnabled() ? parseCookies(req)[ACCESS_COOKIE_NAME] : null;
+  const token = (authHeader && authHeader.split(' ')[1]) || req.query?.token || req.query?.access_token || cookieToken;
   if (!token) {
     logger.warn('Access attempt without token', { ip: req.ip, path: req.path });
     await recordAuditEvent(req, 'AUTH_MISSING_TOKEN', `Missing token for ${req.path}`);
@@ -1070,7 +1298,19 @@ async function authenticateTokenFromQuery(req, res, next) {
 
 // Flow payment push notifications (SSE)
 const flowSubscribers = new Set();
-function notifyFlowSubscribers(company, payload) {
+const FLOW_PUBSUB_CHANNEL = process.env.FLOW_PUBSUB_CHANNEL || 'dmf:flow_updates';
+const FLOW_PUBSUB_NODE_ID = crypto.randomUUID();
+let flowSubscriberClient = null;
+let flowPubSubInitPromise = null;
+let flowPubSubWarnedNoRedis = false;
+const flowPubSubState = {
+  enabled: FEATURE_FLAGS.enable_pubsub_sse === true,
+  subscribed: false,
+  redis_ready: false,
+  last_error: null
+};
+
+function emitLocalFlowUpdate(company, payload) {
   const data = JSON.stringify(payload || {});
   for (const sub of flowSubscribers) {
     if (sub.company && company && sub.company !== company) continue;
@@ -1080,6 +1320,89 @@ function notifyFlowSubscribers(company, payload) {
     } catch (_) {
       // ignore broken stream
     }
+  }
+}
+
+async function ensureFlowPubSubSubscription() {
+  if (!FEATURE_FLAGS.enable_pubsub_sse) return false;
+  if (flowPubSubState.subscribed && flowSubscriberClient) return true;
+  if (flowPubSubInitPromise) return flowPubSubInitPromise;
+
+  flowPubSubInitPromise = (async () => {
+    try {
+      const redis = await getRedisClient();
+      const redisOk = !!redis && isRedisReady();
+      flowPubSubState.redis_ready = redisOk;
+      flowPubSubState.enabled = FEATURE_FLAGS.enable_pubsub_sse === true;
+      if (!redisOk) {
+        if (!flowPubSubWarnedNoRedis) {
+          flowPubSubWarnedNoRedis = true;
+          logger.warn('Pub/Sub SSE enabled but Redis is unavailable; falling back to local-only SSE.');
+        }
+        flowPubSubState.subscribed = false;
+        return false;
+      }
+
+      if (!flowSubscriberClient) {
+        flowSubscriberClient = redis.duplicate();
+        flowSubscriberClient.on('error', (error) => {
+          flowPubSubState.last_error = error?.message || String(error);
+          flowPubSubState.subscribed = false;
+        });
+        await flowSubscriberClient.connect();
+      }
+
+      await flowSubscriberClient.subscribe(FLOW_PUBSUB_CHANNEL, (message) => {
+        try {
+          const parsed = JSON.parse(String(message || '{}'));
+          if (parsed?.source_id && parsed.source_id === FLOW_PUBSUB_NODE_ID) return;
+          emitLocalFlowUpdate(parsed?.company || null, parsed?.payload || {});
+        } catch (_) {
+          // Ignore malformed pubsub payloads to keep stream resilient.
+        }
+      });
+      flowPubSubState.subscribed = true;
+      flowPubSubState.last_error = null;
+      return true;
+    } catch (error) {
+      flowPubSubState.last_error = error?.message || String(error);
+      flowPubSubState.subscribed = false;
+      logger.warn('Failed to initialize Pub/Sub SSE subscription', { error: flowPubSubState.last_error });
+      return false;
+    } finally {
+      flowPubSubInitPromise = null;
+    }
+  })();
+
+  return flowPubSubInitPromise;
+}
+
+async function publishFlowUpdate(company, payload) {
+  if (!FEATURE_FLAGS.enable_pubsub_sse) return false;
+  try {
+    const redis = await getRedisClient();
+    const redisOk = !!redis && isRedisReady();
+    flowPubSubState.redis_ready = redisOk;
+    if (!redisOk) return false;
+    const message = JSON.stringify({
+      source_id: FLOW_PUBSUB_NODE_ID,
+      company: company || null,
+      payload: payload || {}
+    });
+    await redis.publish(FLOW_PUBSUB_CHANNEL, message);
+    return true;
+  } catch (error) {
+    flowPubSubState.last_error = error?.message || String(error);
+    logger.warn('Failed to publish flow update to Redis channel', { error: flowPubSubState.last_error });
+    return false;
+  }
+}
+
+function notifyFlowSubscribers(company, payload) {
+  emitLocalFlowUpdate(company, payload);
+  if (FEATURE_FLAGS.enable_pubsub_sse) {
+    ensureFlowPubSubSubscription().catch(() => {});
+    publishFlowUpdate(company, payload).catch(() => {});
   }
 }
 
@@ -1210,10 +1533,17 @@ app.post('/api/auth/register', [
     }
 
     // Check if user already exists
-    let existingUser = users.find(u =>
-      String(u.username || '').toLowerCase() === normalizedUsername.toLowerCase() ||
-      String(u.email || '').toLowerCase() === normalizedEmail.toLowerCase()
-    );
+    if (strictApiOnlyAuthEnabled() && !isDbReady()) {
+      return res.status(503).json({ error: 'Database not ready' });
+    }
+
+    let existingUser = null;
+    if (inMemoryUserFallbackEnabled()) {
+      existingUser = users.find(u =>
+        String(u.username || '').toLowerCase() === normalizedUsername.toLowerCase() ||
+        String(u.email || '').toLowerCase() === normalizedEmail.toLowerCase()
+      );
+    }
     if (!existingUser && isDbReady()) {
       existingUser = await getUserByUsernameOrEmail(normalizedUsername) || await getUserByUsernameOrEmail(normalizedEmail);
     }
@@ -1246,7 +1576,9 @@ app.post('/api/auth/register', [
       created_at: new Date().toISOString(),
       last_login: null
     };
-    users.push(fallbackUser);
+    if (inMemoryUserFallbackEnabled()) {
+      users.push(fallbackUser);
+    }
 
     logger.info('User registered successfully', { username, email, role: (newUser?.role || fallbackUser.role) });
     emitEventWebhook('user_created', {
@@ -1279,10 +1611,17 @@ app.post('/api/auth/login', [
     const { username, password } = req.body;
     const loginValue = String(username || '').trim();
 
-    let user = users.find(u =>
-      String(u.username || '').toLowerCase() === loginValue.toLowerCase() ||
-      String(u.email || '').toLowerCase() === loginValue.toLowerCase()
-    );
+    if (strictApiOnlyAuthEnabled() && !isDbReady()) {
+      return res.status(503).json({ error: 'Database not ready' });
+    }
+
+    let user = null;
+    if (inMemoryUserFallbackEnabled()) {
+      user = users.find(u =>
+        String(u.username || '').toLowerCase() === loginValue.toLowerCase() ||
+        String(u.email || '').toLowerCase() === loginValue.toLowerCase()
+      );
+    }
     if (!user && isDbReady()) {
       user = await getUserByUsernameOrEmail(loginValue);
     }
@@ -1325,12 +1664,11 @@ app.post('/api/auth/login', [
     }
     user.last_login = new Date().toISOString();
 
-    // Generate JWT
-    const token = jwt.sign(
-      { id: user.id, username: user.username, email: user.email, role: user.role, name: user.name || null },
-      JWT_SECRET,
-      { expiresIn: '48h' }
-    );
+    // Generate user access token (legacy body token) and optional HttpOnly session cookies.
+    const token = signUserAccessToken(user);
+    if (httpOnlySessionEnabled()) {
+      await issueHttpOnlySession(res, req, user);
+    }
 
     logger.info('User logged in successfully', { username, role: user.role });
 
@@ -1347,6 +1685,132 @@ app.post('/api/auth/login', [
   } catch (error) {
     logger.error('Login error', { error: error.message });
     res.status(500).json({ error: 'Login failed' });
+  }
+});
+
+app.post('/api/auth/user-refresh', async (req, res) => {
+  try {
+    if (!httpOnlySessionEnabled()) {
+      return res.status(404).json({ error: 'Not found' });
+    }
+    if (!isDbReady()) {
+      return res.status(503).json({ error: 'Database not ready' });
+    }
+
+    const cookies = parseCookies(req);
+    const refreshToken = String(req.body?.refresh_token || cookies[REFRESH_COOKIE_NAME] || '').trim();
+    if (!refreshToken) {
+      clearAuthCookies(res);
+      return res.status(401).json({ error: 'Refresh token required' });
+    }
+
+    let payload = null;
+    try {
+      payload = jwt.verify(refreshToken, JWT_SECRET);
+    } catch (_) {
+      clearAuthCookies(res);
+      return res.status(401).json({ error: 'Invalid refresh token' });
+    }
+
+    if (!payload || payload.typ !== 'refresh' || !payload.sid || !payload.fid || !payload.id) {
+      clearAuthCookies(res);
+      return res.status(401).json({ error: 'Invalid refresh token' });
+    }
+
+    const current = await getUserRefreshSession(payload.sid);
+    if (!current || Number(current.user_id) !== Number(payload.id) || String(current.family_id) !== String(payload.fid)) {
+      clearAuthCookies(res);
+      return res.status(401).json({ error: 'Refresh session not found' });
+    }
+    if (current.revoked_at || current.rotated_at) {
+      await revokeUserRefreshSessionsByFamily(payload.fid);
+      clearAuthCookies(res);
+      return res.status(401).json({ error: 'Refresh session revoked' });
+    }
+    if (current.expires_at && new Date(current.expires_at).getTime() <= Date.now()) {
+      await revokeUserRefreshSessionsByFamily(payload.fid);
+      clearAuthCookies(res);
+      return res.status(401).json({ error: 'Refresh session expired' });
+    }
+
+    const user = await getUserById(payload.id);
+    if (!user) {
+      await revokeUserRefreshSessionsByFamily(payload.fid);
+      clearAuthCookies(res);
+      return res.status(403).json({ error: 'User not found' });
+    }
+
+    const newTokenId = crypto.randomUUID();
+    const newRefreshToken = signUserRefreshToken({
+      user,
+      tokenId: newTokenId,
+      familyId: payload.fid,
+      expiresIn: `${USER_REFRESH_EXPIRES_DAYS}d`
+    });
+    const newExpiresAt = new Date(Date.now() + USER_REFRESH_EXPIRES_DAYS * 24 * 60 * 60 * 1000);
+    const rotated = await rotateUserRefreshSession({
+      oldTokenId: payload.sid,
+      newTokenId,
+      userId: user.id,
+      familyId: payload.fid,
+      expiresAt: newExpiresAt,
+      userAgent: getRequestUserAgent(req),
+      ip: getClientIp(req)
+    });
+    if (!rotated) {
+      await revokeUserRefreshSessionsByFamily(payload.fid);
+      clearAuthCookies(res);
+      return res.status(401).json({ error: 'Refresh session invalidated' });
+    }
+
+    const token = signUserAccessToken(user);
+    setCookie(res, ACCESS_COOKIE_NAME, token, {
+      maxAge: 48 * 60 * 60,
+      path: '/',
+      sameSite: 'Lax'
+    });
+    setCookie(res, REFRESH_COOKIE_NAME, newRefreshToken, {
+      maxAge: USER_REFRESH_EXPIRES_DAYS * 24 * 60 * 60,
+      path: '/api/auth',
+      sameSite: 'Strict'
+    });
+
+    const permissions = await loadRolePermissions(user.role);
+    return res.json({
+      message: 'User token refreshed successfully',
+      token,
+      user: {
+        ...sanitizeUserForResponse(user),
+        permissions
+      }
+    });
+  } catch (error) {
+    logger.error('User refresh error', { error: error.message });
+    clearAuthCookies(res);
+    return res.status(500).json({ error: 'Failed to refresh user token' });
+  }
+});
+
+app.post('/api/auth/logout', async (req, res) => {
+  try {
+    const cookies = parseCookies(req);
+    const refreshToken = String(cookies[REFRESH_COOKIE_NAME] || '').trim();
+    if (isDbReady() && refreshToken) {
+      try {
+        const payload = jwt.verify(refreshToken, JWT_SECRET);
+        if (payload?.typ === 'refresh' && payload?.fid) {
+          await revokeUserRefreshSessionsByFamily(payload.fid);
+        }
+      } catch (_) {
+        // Ignore malformed/expired refresh on logout.
+      }
+    }
+    clearAuthCookies(res);
+    return res.json({ success: true });
+  } catch (error) {
+    logger.error('Logout error', { error: error.message });
+    clearAuthCookies(res);
+    return res.status(500).json({ success: false, error: 'Failed to logout' });
   }
 });
 
@@ -1498,15 +1962,19 @@ app.get('/api/flow-payments/stats', authenticateToken, authorizeRole('admin'), a
 });
 
 app.get('/api/flow-payments/stream', authenticateTokenFromQuery, authorizeRole('user'), requireCompanyParam, enforceCompanyAccess, (req, res) => {
-  res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
   res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
   res.flushHeaders();
 
   const company = normalizeCompany(req.query.company) || null;
   const subscriber = { res, company };
   flowSubscribers.add(subscriber);
 
+  // Send an initial prelude to reduce proxy buffering on some frontends.
+  res.write(`: ${' '.repeat(2048)}\n`);
+  res.write(`retry: 10000\n\n`);
   res.write(`event: flow_update\n`);
   res.write(`data: ${JSON.stringify({ type: 'connected', company })}\n\n`);
 
@@ -1526,6 +1994,7 @@ app.post(
   authorizeRole('user'),
   authorizePermission('import_payments'),
   enforceCompanyAccess,
+  distributedImportLimiter,
   importLimiter,
   validateRequest([
     body('payments').optional().isArray(),
@@ -1799,6 +2268,7 @@ app.post(
   authorizeRole('admin'),
   authorizePermission('archive_flow'),
   enforceCompanyAccess,
+  distributedCriticalLimiter,
   criticalLimiter,
   validateRequest([
     body('company').optional().isString(),
@@ -1869,6 +2339,7 @@ app.delete(
   authorizeRole('admin'),
   authorizePermission('delete_archive'),
   enforceCompanyAccess,
+  distributedCriticalLimiter,
   criticalLimiter,
   validateRequest([
     param('id').notEmpty().withMessage('Archive id required')
@@ -2044,7 +2515,7 @@ app.post('/api/payments/:id/sign', authenticateToken, authorizeRole('gestor'), a
 });
 
 // Security: Protected route to remove a payment flow (requires admin)
-app.delete('/api/payments/:id', authenticateToken, authorizeRole('admin'), authorizePermission('delete_payments'), criticalLimiter, [
+app.delete('/api/payments/:id', authenticateToken, authorizeRole('admin'), authorizePermission('delete_payments'), distributedCriticalLimiter, criticalLimiter, [
   param('id').notEmpty().withMessage('Payment ID required'),
 ], async (req, res) => {
   try {
@@ -2403,13 +2874,21 @@ app.get('/api/health', async (req, res) => {
     db: describeDatabaseUrl(process.env.DATABASE_URL),
     permissions_enforced: PERMISSIONS_ENFORCED,
     company_access_enforced: ENFORCE_COMPANY_ACCESS,
+    feature_flags: FEATURE_FLAGS,
     secret_manager_enabled: process.env.SECRET_MANAGER_ENABLED === 'true',
     secret_manager_project: process.env.GCP_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT || null,
     roles: roleCount,
     runtime: {
       sse_subscribers: flowSubscribers.size,
       conflicts_total: runtimeStats.conflictsTotal,
-      last_conflict_at: runtimeStats.lastConflictAt
+      last_conflict_at: runtimeStats.lastConflictAt,
+      redis_ready: isRedisReady(),
+      sse_pubsub: {
+        enabled: FEATURE_FLAGS.enable_pubsub_sse === true,
+        channel: FLOW_PUBSUB_CHANNEL,
+        subscribed: flowPubSubState.subscribed,
+        last_error: flowPubSubState.last_error
+      }
     },
     services: {
       conta_azul_configured: !!CLIENT_ID && !!CLIENT_SECRET && !!TOKEN_URL,
@@ -2597,6 +3076,7 @@ app.delete(
   authenticateToken,
   authorizeRole('admin'),
   authorizePermission('roles_manage'),
+  distributedCriticalLimiter,
   criticalLimiter,
   validateRequest([
     param('name').notEmpty().withMessage('Role name required')
@@ -2622,7 +3102,7 @@ app.delete(
 );
 
 // Admin: revoke all sessions for a user
-app.post('/api/auth/revoke/:id', authenticateToken, authorizeRole('admin'), authorizePermission('revoke_sessions'), criticalLimiter, [
+app.post('/api/auth/revoke/:id', authenticateToken, authorizeRole('admin'), authorizePermission('revoke_sessions'), distributedCriticalLimiter, criticalLimiter, [
   param('id').isInt().withMessage('Valid user ID required'),
 ], async (req, res) => {
   try {
@@ -2632,6 +3112,9 @@ app.post('/api/auth/revoke/:id', authenticateToken, authorizeRole('admin'), auth
     }
     const userId = Number(req.params.id);
     await setUserSessionRevokedAfter(userId, new Date());
+    if (isDbReady()) {
+      await revokeUserRefreshSessionsByUser(userId);
+    }
     emitEventWebhook('user_sessions_revoked', { userId, admin: req.user?.username || null });
     await recordAuditEvent(req, 'SESSIONS_REVOKED', `Sessões revogadas para usuário ${userId}.`, {
       userId
@@ -2644,9 +3127,13 @@ app.post('/api/auth/revoke/:id', authenticateToken, authorizeRole('admin'), auth
 });
 
 // Self: revoke current sessions (logout everywhere)
-app.post('/api/auth/revoke-self', authenticateToken, authorizeRole('admin'), authorizePermission('revoke_sessions'), criticalLimiter, async (req, res) => {
+app.post('/api/auth/revoke-self', authenticateToken, authorizeRole('admin'), authorizePermission('revoke_sessions'), distributedCriticalLimiter, criticalLimiter, async (req, res) => {
   try {
     await setUserSessionRevokedAfter(req.user?.id, new Date());
+    if (isDbReady()) {
+      await revokeUserRefreshSessionsByUser(req.user?.id);
+    }
+    clearAuthCookies(res);
     await recordAuditEvent(req, 'SESSIONS_REVOKED_SELF', 'Sessões revogadas pelo próprio usuário.', {
       userId: req.user?.id || null
     });
@@ -2660,7 +3147,11 @@ app.post('/api/auth/revoke-self', authenticateToken, authorizeRole('admin'), aut
 // Admin: list users
 app.get('/api/users', authenticateToken, authorizeRole('admin'), authorizePermission('user_manage'), async (req, res) => {
   try {
-    let data = users.map(sanitizeUserForResponse);
+    if (strictApiOnlyAuthEnabled() && !isDbReady()) {
+      return res.status(503).json({ success: false, error: 'Database not ready' });
+    }
+
+    let data = inMemoryUserFallbackEnabled() ? users.map(sanitizeUserForResponse) : [];
     if (isDbReady()) {
       const dbUsers = await listUsers();
       data = dbUsers.map(sanitizeUserForResponse);
@@ -2692,7 +3183,11 @@ app.put('/api/users/:id', authenticateToken, authorizeRole('admin'), authorizePe
       return res.status(400).json({ success: false, error: 'Cannot update own role via this endpoint' });
     }
 
-    let user = users.find(u => Number(u.id) === userId);
+    if (strictApiOnlyAuthEnabled() && !isDbReady()) {
+      return res.status(503).json({ success: false, error: 'Database not ready' });
+    }
+
+    let user = inMemoryUserFallbackEnabled() ? users.find(u => Number(u.id) === userId) : null;
     if (!user && isDbReady()) {
       user = await getUserById(userId);
     }
@@ -2755,7 +3250,7 @@ app.put('/api/users/:id', authenticateToken, authorizeRole('admin'), authorizePe
 });
 
 // Admin: delete user
-app.delete('/api/users/:id', authenticateToken, authorizeRole('admin'), authorizePermission('user_manage'), criticalLimiter, [
+app.delete('/api/users/:id', authenticateToken, authorizeRole('admin'), authorizePermission('user_manage'), distributedCriticalLimiter, criticalLimiter, [
   param('id').isInt().withMessage('Valid user ID required'),
 ], async (req, res) => {
   try {
@@ -2769,7 +3264,11 @@ app.delete('/api/users/:id', authenticateToken, authorizeRole('admin'), authoriz
       return res.status(400).json({ success: false, error: 'Cannot delete your own account' });
     }
 
-    let user = users.find(u => Number(u.id) === userId);
+    if (strictApiOnlyAuthEnabled() && !isDbReady()) {
+      return res.status(503).json({ success: false, error: 'Database not ready' });
+    }
+
+    let user = inMemoryUserFallbackEnabled() ? users.find(u => Number(u.id) === userId) : null;
     if (!user && isDbReady()) {
       user = await getUserById(userId);
     }
@@ -2780,9 +3279,11 @@ app.delete('/api/users/:id', authenticateToken, authorizeRole('admin'), authoriz
     if (isDbReady()) {
       await deleteUserById(userId);
     }
-    const index = users.findIndex(u => Number(u.id) === userId);
-    if (index >= 0) {
-      users.splice(index, 1);
+    if (inMemoryUserFallbackEnabled()) {
+      const index = users.findIndex(u => Number(u.id) === userId);
+      if (index >= 0) {
+        users.splice(index, 1);
+      }
     }
 
     emitEventWebhook('user_deleted', {
@@ -2803,7 +3304,7 @@ app.delete('/api/users/:id', authenticateToken, authorizeRole('admin'), authoriz
 });
 
 // Admin: backup (users + flow + archives)
-app.get('/api/backup', authenticateToken, authorizeRole('admin'), authorizePermission('backup_restore'), criticalLimiter, async (req, res) => {
+app.get('/api/backup', authenticateToken, authorizeRole('admin'), authorizePermission('backup_restore'), distributedCriticalLimiter, criticalLimiter, async (req, res) => {
   try {
     if (!isDbReady()) {
       return res.status(503).json({ error: 'Database not ready' });
@@ -2859,6 +3360,7 @@ app.post(
   authenticateToken,
   authorizeRole('admin'),
   authorizePermission('backup_restore'),
+  distributedCriticalLimiter,
   criticalLimiter,
   validateRequest([
     body('users').optional().isArray(),
@@ -2958,6 +3460,7 @@ async function initializeDatabaseAndRuntime() {
         logger.info('Database schema validated');
       }
       await loadTokensFromDb();
+      await ensureFlowPubSubSubscription();
       logger.info('Runtime initialized');
       break;
     } catch (error) {
@@ -2988,6 +3491,7 @@ async function startServer() {
   try {
     await loadSecretsFromSecretManager();
     applyRuntimeConfigFromEnv();
+    logger.info('Feature flags loaded', FEATURE_FLAGS);
 
     if (process.env.NODE_ENV === 'production') {
       if (!JWT_SECRET) {

@@ -90,6 +90,11 @@ Rodar validações locais:
 npm run check:phase3
 ```
 
+Baseline de não regressão (Etapa 1):
+```bash
+npm run check:baseline
+```
+
 Check de readiness (incluído no `check:phase3`):
 ```bash
 npm run check:readiness
@@ -99,3 +104,23 @@ Para validar também existência dos segredos no GCP:
 ```bash
 VERIFY_GCLOUD_SECRETS=true npm run check:readiness
 ```
+
+## 8) Rollout por feature flags (Etapa 2)
+
+As flags abaixo existem para habilitar blocos de multiusuário de forma gradual, sem remover o fluxo atual:
+- `ENABLE_REDIS_CACHE`
+- `ENABLE_DISTRIBUTED_RATE_LIMIT`
+- `ENABLE_PUBSUB_SSE`
+- `ENABLE_STRICT_API_ONLY_AUTH`
+- `ENABLE_HTTPONLY_SESSION`
+
+Quando `ENABLE_HTTPONLY_SESSION=true`:
+- Login também emite cookies `HttpOnly` (`ACCESS_COOKIE_NAME` e `REFRESH_COOKIE_NAME`).
+- Refresh de sessão de usuário passa a usar `POST /api/auth/user-refresh`.
+- Logout de sessão via `POST /api/auth/logout`.
+
+Padrão seguro:
+- Todas em `false` no `app.yaml`.
+- Ativar uma por vez em ambiente de homologação.
+- Validar `GET /api/health` em `feature_flags`.
+- Executar smoke após cada ativação.

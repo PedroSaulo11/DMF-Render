@@ -104,6 +104,18 @@ const UserSessionModel = () => getSequelize().define('user_sessions', {
   revoked_after: { type: DataTypes.DATE },
 }, { timestamps: false, freezeTableName: true });
 
+const UserRefreshSessionModel = () => getSequelize().define('app_user_refresh_sessions', {
+  token_id: { type: DataTypes.TEXT, primaryKey: true },
+  user_id: { type: DataTypes.BIGINT, allowNull: false },
+  family_id: { type: DataTypes.TEXT, allowNull: false },
+  expires_at: { type: DataTypes.DATE, allowNull: false },
+  revoked_at: { type: DataTypes.DATE },
+  rotated_at: { type: DataTypes.DATE },
+  user_agent: { type: DataTypes.TEXT },
+  ip: { type: DataTypes.TEXT },
+  created_at: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
+}, { timestamps: false, freezeTableName: true });
+
 const UserCompanyModel = () => getSequelize().define('app_user_companies', {
   user_id: { type: DataTypes.BIGINT, primaryKey: true },
   company: { type: DataTypes.TEXT, primaryKey: true },
@@ -141,6 +153,7 @@ async function initDb() {
       AuditEventModel();
       RoleModel();
       UserSessionModel();
+      UserRefreshSessionModel();
       UserCompanyModel();
       CenterCompanyModel();
       BackupSnapshotModel();
@@ -451,6 +464,82 @@ async function setUserSessionRevokedAfter(userId, revokedAfter) {
   });
 }
 
+async function createUserRefreshSession({ tokenId, userId, familyId, expiresAt, userAgent = null, ip = null }) {
+  const Session = UserRefreshSessionModel();
+  await Session.create({
+    token_id: String(tokenId),
+    user_id: Number(userId),
+    family_id: String(familyId),
+    expires_at: expiresAt,
+    user_agent: userAgent || null,
+    ip: ip || null,
+    created_at: new Date()
+  });
+  const row = await Session.findByPk(String(tokenId));
+  return row ? row.toJSON() : null;
+}
+
+async function getUserRefreshSession(tokenId) {
+  const Session = UserRefreshSessionModel();
+  const row = await Session.findByPk(String(tokenId));
+  return row ? row.toJSON() : null;
+}
+
+async function rotateUserRefreshSession({ oldTokenId, newTokenId, userId, familyId, expiresAt, userAgent = null, ip = null }) {
+  const db = getSequelize();
+  const Session = UserRefreshSessionModel();
+  return db.transaction(async (transaction) => {
+    const [updated] = await Session.update({
+      rotated_at: new Date()
+    }, {
+      where: {
+        token_id: String(oldTokenId),
+        user_id: Number(userId),
+        family_id: String(familyId),
+        revoked_at: { [Op.is]: null },
+        rotated_at: { [Op.is]: null }
+      },
+      transaction
+    });
+    if (!updated) return null;
+    await Session.create({
+      token_id: String(newTokenId),
+      user_id: Number(userId),
+      family_id: String(familyId),
+      expires_at: expiresAt,
+      user_agent: userAgent || null,
+      ip: ip || null,
+      created_at: new Date()
+    }, { transaction });
+    const row = await Session.findByPk(String(newTokenId), { transaction });
+    return row ? row.toJSON() : null;
+  });
+}
+
+async function revokeUserRefreshSessionsByUser(userId) {
+  const Session = UserRefreshSessionModel();
+  return Session.update({
+    revoked_at: new Date()
+  }, {
+    where: {
+      user_id: Number(userId),
+      revoked_at: { [Op.is]: null }
+    }
+  });
+}
+
+async function revokeUserRefreshSessionsByFamily(familyId) {
+  const Session = UserRefreshSessionModel();
+  return Session.update({
+    revoked_at: new Date()
+  }, {
+    where: {
+      family_id: String(familyId),
+      revoked_at: { [Op.is]: null }
+    }
+  });
+}
+
 async function listFlowPayments(company = null) {
   const Flow = FlowPaymentModel();
   let where = {};
@@ -667,7 +756,8 @@ async function validateDbSchema() {
     { table: 'flow_payments', columns: ['id', 'company', 'assinatura', 'version', 'updated_at'] },
     { table: 'app_roles', columns: ['name', 'permissions'] },
     { table: 'app_center_companies', columns: ['center_key', 'center_label', 'company'] },
-    { table: 'app_user_companies', columns: ['user_id', 'company'] }
+    { table: 'app_user_companies', columns: ['user_id', 'company'] },
+    { table: 'app_user_refresh_sessions', columns: ['token_id', 'user_id', 'family_id', 'expires_at'] }
   ];
   const missing = [];
   for (const item of checks) {
@@ -857,6 +947,11 @@ module.exports = {
   replaceRoles,
   getUserSession,
   setUserSessionRevokedAfter,
+  createUserRefreshSession,
+  getUserRefreshSession,
+  rotateUserRefreshSession,
+  revokeUserRefreshSessionsByUser,
+  revokeUserRefreshSessionsByFamily,
   insertWebhook,
   validateDbSchema,
 };

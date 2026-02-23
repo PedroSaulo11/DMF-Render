@@ -15,6 +15,14 @@ Levar o sistema para operacao multiusuario com seguranca, consistencia e observa
   - `runtime.sse_subscribers`
   - `runtime.conflicts_total`
   - `runtime.last_conflict_at`
+- [x] Feature flags de rollout seguro adicionadas (desligadas por padrao):
+  - `ENABLE_REDIS_CACHE`
+  - `ENABLE_DISTRIBUTED_RATE_LIMIT`
+  - `ENABLE_PUBSUB_SSE`
+  - `ENABLE_STRICT_API_ONLY_AUTH`
+  - `ENABLE_HTTPONLY_SESSION`
+- [x] Baseline de nao regressao unificado:
+  - `npm run check:baseline`
 
 ## Bloco Esta Semana (operacional)
 - [ ] Criar/validar todos os secrets no GCP com `latest` ativo.
@@ -22,6 +30,7 @@ Levar o sistema para operacao multiusuario com seguranca, consistencia e observa
 - [ ] Deploy controlado e smoke pos-deploy.
 - [ ] Teste com 2+ usuarios simultaneos (admin + gestor), assinando/importando no mesmo fluxo.
 - [ ] Registrar baseline de latencia de propagacao (meta: 0-3s).
+- [ ] Ativar flags em rollout progressivo (uma por vez), validando `GET /api/health` e smoke entre ativacoes.
 
 Comandos recomendados:
 ```bash

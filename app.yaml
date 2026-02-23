@@ -2,9 +2,9 @@ runtime: nodejs20
 env: standard
 
 automatic_scaling:
-  # Multiuser: keep a single instance to avoid SSE "split brain" until a shared pub/sub is added.
-  # Also avoids the default max_instances=20 behavior.
-  max_instances: 1
+  # Multiuser: allow >1 instances now that distributed controls are in place.
+  # Keep a conservative cap to contain costs while validating rollout.
+  max_instances: 2
 
 beta_settings:
   cloud_sql_instances: project-b2fcff48-a0ca-4867-995:southamerica-east1:meu-banco-postgres
@@ -27,7 +27,11 @@ env_variables:
   DB_CONNECT_RETRY_DELAY_MS: "2000"
   EVENT_WEBHOOK_URL: ""
   ALLOW_PUBLIC_REGISTER: "false"
-
+  ENABLE_REDIS_CACHE: "true"
+  ENABLE_DISTRIBUTED_RATE_LIMIT: "true"
+  ENABLE_PUBSUB_SSE: "true"
+  ENABLE_STRICT_API_ONLY_AUTH: "true"
+  ENABLE_HTTPONLY_SESSION: "true"
   SECRET_MANAGER_ENABLED: "true"
   GCP_PROJECT_ID: "project-b2fcff48-a0ca-4867-995"
   SECRET_JWT_SECRET: "JWT_SECRET"
@@ -37,7 +41,23 @@ env_variables:
   SECRET_DATABASE_URL: "DATABASE_URL"
   SECRET_SIGNATURE_SECRET: "SIGNATURE_SECRET"
   SECRET_EVENT_WEBHOOK_SECRET: "EVENT_WEBHOOK_SECRET"
+  SECRET_REDIS_URL: "REDIS_URL"
 
 handlers:
 - url: /.*
   script: auto
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

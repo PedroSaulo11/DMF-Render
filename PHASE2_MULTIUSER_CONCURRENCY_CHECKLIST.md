@@ -4,6 +4,9 @@
 - Usar 2 dispositivos/sessoes diferentes com usuarios distintos.
 - Confirmar ambos na mesma empresa/fluxo (ex.: `Real Energy`).
 - Abrir DevTools Network em ambos.
+- Ativar somente uma feature flag por rodada de teste.
+- Confirmar em `GET /api/health`:
+  - `feature_flags` coerente com a rodada atual.
 
 ## Teste 1 - Upsert com conflito de versao
 - Dispositivo A abre um pagamento e mantem dados em tela.
@@ -38,3 +41,4 @@
 - Conflitos reais retornam `409` padronizado.
 - Operacoes sem corrida continuam funcionais.
 - Logs permitem rastrear cada conflito por `request_id`.
+- Qualquer regressao funcional implica rollback da flag da rodada e nova validacao baseline.

@@ -84,6 +84,16 @@ function checkAppYamlStrategy() {
   } else {
     ok('Mapeamento de nomes de secrets presente no app.yaml.');
   }
+
+  const distFlags = [
+    findYamlValue(appYaml, 'ENABLE_REDIS_CACHE') === 'true',
+    findYamlValue(appYaml, 'ENABLE_DISTRIBUTED_RATE_LIMIT') === 'true',
+    findYamlValue(appYaml, 'ENABLE_PUBSUB_SSE') === 'true'
+  ];
+  const redisSecretMapped = !!findYamlValue(appYaml, 'SECRET_REDIS_URL');
+  if (distFlags.some(Boolean) && !redisSecretMapped) {
+    warn('Flags distribuidas estao ativas, mas SECRET_REDIS_URL nao esta mapeado no app.yaml.');
+  }
 }
 
 function checkSecretsWithGcloud() {
