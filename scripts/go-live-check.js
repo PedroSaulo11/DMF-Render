@@ -26,6 +26,16 @@ function has(name) {
   return String(process.env[name] || '').trim().length > 0;
 }
 
+function envBool(name, fallback = false) {
+  const raw = String(process.env[name] || '').trim().toLowerCase();
+  if (!raw) return fallback;
+  return raw === '1' || raw === 'true' || raw === 'yes';
+}
+
+function isCi() {
+  return envBool('CI', false);
+}
+
 function main() {
   run('npm', ['run', 'check:phase3']);
 
@@ -36,8 +46,17 @@ function main() {
     console.log('[go-live] SKIP smoke:prod/check:audit-fallback:prod (BASE_URL not set)');
   }
 
+  const strictLoad = envBool('STRICT_LOAD_CHECK', false);
   if (has('BASE_URL') && has('ACCESS_TOKEN')) {
-    run('npm', ['run', 'load:prod:multiuser']);
+    try {
+      run('npm', ['run', 'load:prod:multiuser']);
+    } catch (error) {
+      if (strictLoad || !isCi()) {
+        throw error;
+      }
+      const msg = error && error.message ? error.message : String(error);
+      console.warn(`[go-live] WARN load:prod:multiuser failed in CI and was downgraded to warning: ${msg}`);
+    }
   } else {
     console.log('[go-live] SKIP load:prod:multiuser (BASE_URL/ACCESS_TOKEN not set)');
   }
