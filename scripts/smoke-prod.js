@@ -59,6 +59,33 @@ async function httpJson(url, init = {}) {
   return { res, text, json };
 }
 
+async function httpJsonWithRetry(url, init = {}, { retries = 3, retryDelayMs = 1200, shouldRetry = null } = {}) {
+  let last = null;
+  for (let attempt = 1; attempt <= retries; attempt += 1) {
+    try {
+      const out = await httpJson(url, init);
+      const retryable = typeof shouldRetry === 'function'
+        ? shouldRetry(out)
+        : out.res.status >= 500;
+      if (!retryable) return out;
+      last = out;
+      if (attempt < retries) {
+        console.warn(`[smoke] retry ${attempt}/${retries} for ${url} (HTTP ${out.res.status})`);
+        await sleep(retryDelayMs * attempt);
+      }
+    } catch (error) {
+      last = error;
+      if (attempt < retries) {
+        const msg = error && error.message ? error.message : String(error);
+        console.warn(`[smoke] retry ${attempt}/${retries} for ${url} (${msg})`);
+        await sleep(retryDelayMs * attempt);
+      }
+    }
+  }
+  if (last && last.res) return last;
+  throw last || new Error(`Request failed after retries: ${url}`);
+}
+
 async function readSseOnce(url, timeoutMs = 7000) {
   const controller = new AbortController();
   const t = setTimeout(() => controller.abort(), timeoutMs).unref?.();
@@ -125,7 +152,11 @@ async function main() {
   // Health should always work
   let healthJson = null;
   {
-    const { res, json, text } = await httpJson(`${base}/api/health`);
+    const { res, json, text } = await httpJsonWithRetry(`${base}/api/health`, {}, {
+      retries: Number(mustEnv('SMOKE_RETRIES', '4')) || 4,
+      retryDelayMs: Number(mustEnv('SMOKE_RETRY_DELAY_MS', '1500')) || 1500,
+      shouldRetry: (out) => out.res.status >= 500
+    });
     assert(res.ok, `GET /api/health failed: HTTP ${res.status} body=${text.slice(0, 300)}`);
     assert(json && json.status === 'ok', 'health JSON missing status=ok');
     healthJson = json;
