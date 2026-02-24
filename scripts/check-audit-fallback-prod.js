@@ -28,7 +28,17 @@ function runGcloud(args) {
   if (result.status !== 0) {
     const stderr = String(result.stderr || '').trim();
     const stdout = String(result.stdout || '').trim();
-    throw new Error(`gcloud ${args.join(' ')} failed: ${stderr || stdout || `exit ${result.status}`}`);
+    const msg = `${stderr || stdout || `exit ${result.status}`}`;
+    const normalized = msg.toLowerCase();
+    if (
+      normalized.includes('do not currently have an active account selected') ||
+      normalized.includes('run:') && normalized.includes('gcloud auth login')
+    ) {
+      const err = new Error(`gcloud_not_authenticated: ${msg}`);
+      err.code = 'GCLOUD_NOT_AUTHENTICATED';
+      throw err;
+    }
+    throw new Error(`gcloud ${args.join(' ')} failed: ${msg}`);
   }
   return String(result.stdout || '');
 }
@@ -52,15 +62,24 @@ async function main() {
   const baseUrl = mustEnv('BASE_URL').replace(/\/+$/, '');
   const startTime = new Date().toISOString();
 
-  const version = runGcloud([
-    'app',
-    'versions',
-    'list',
-    '--service=default',
-    '--sort-by=~version.createTime',
-    '--limit=1',
-    '--format=value(id)'
-  ]).trim();
+  let version = '';
+  try {
+    version = runGcloud([
+      'app',
+      'versions',
+      'list',
+      '--service=default',
+      '--sort-by=~version.createTime',
+      '--limit=1',
+      '--format=value(id)'
+    ]).trim();
+  } catch (error) {
+    if (error && error.code === 'GCLOUD_NOT_AUTHENTICATED') {
+      console.log('[audit-fallback] SKIP gcloud not authenticated in this environment');
+      return;
+    }
+    throw error;
+  }
   assert(version, 'Could not resolve latest App Engine version.');
 
   const noToken = await hit(`${baseUrl}/api/auth/user-status`);
