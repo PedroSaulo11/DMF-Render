@@ -40,9 +40,39 @@ async function request(url, { method = 'GET', token = '', body = null } = {}) {
   return { status: res.status, elapsed, json, text };
 }
 
+async function resolveToken(base, preferredToken) {
+  const candidate = (preferredToken || '').trim();
+  if (candidate) {
+    const probe = await request(`${base}/api/auth/user-status`, {
+      method: 'GET',
+      token: candidate
+    });
+    if (probe.status === 200) {
+      return candidate;
+    }
+    console.warn(`[load] WARN ACCESS_TOKEN probe failed with HTTP ${probe.status}; trying login fallback`);
+  }
+
+  const username = env('TEST_USERNAME', '');
+  const password = env('TEST_PASSWORD', '');
+  if (!username || !password) {
+    throw new Error('No valid ACCESS_TOKEN and missing TEST_USERNAME/TEST_PASSWORD for fallback login');
+  }
+
+  const login = await request(`${base}/api/auth/login`, {
+    method: 'POST',
+    body: { username, password }
+  });
+  if (login.status !== 200 || !login.json || !login.json.token) {
+    throw new Error(`Fallback login failed: HTTP ${login.status} body=${String(login.text || '').slice(0, 200)}`);
+  }
+  console.log(`[load] login fallback ok user=${login.json.user?.email || login.json.user?.username || username}`);
+  return login.json.token;
+}
+
 async function main() {
   const base = required('BASE_URL').replace(/\/+$/, '');
-  const token = required('ACCESS_TOKEN');
+  const token = await resolveToken(base, env('ACCESS_TOKEN', ''));
   const company = env('TEST_COMPANY', 'Real Energy');
   const workers = Math.max(1, Number(env('LOAD_WORKERS', '8')) || 8);
   const rounds = Math.max(1, Number(env('LOAD_ROUNDS', '20')) || 20);
@@ -53,6 +83,7 @@ async function main() {
   let fail = 0;
   let conflicts = 0;
   let deleted = 0;
+  const failReasons = new Map();
 
   console.log(`[load] base=${base} company=${company} workers=${workers} rounds=${rounds}`);
 
@@ -75,6 +106,8 @@ async function main() {
     latencies.push(create.elapsed);
     if (create.status !== 200) {
       fail += 1;
+      const key = `create:${create.status}`;
+      failReasons.set(key, (failReasons.get(key) || 0) + 1);
       return;
     }
 
@@ -92,6 +125,8 @@ async function main() {
       conflicts += 1;
     } else {
       fail += 1;
+      const key = `sign:${statuses[0]}-${statuses[1]}`;
+      failReasons.set(key, (failReasons.get(key) || 0) + 1);
     }
 
     const del = await request(`${base}/api/flow-payments/${encodeURIComponent(id)}?company=${encodeURIComponent(company)}`, {
@@ -118,6 +153,10 @@ async function main() {
 
   console.log(`[load] done total=${total} ok=${ok} fail=${fail} conflicts=${conflicts} deleted=${deleted}`);
   console.log(`[load] latency_ms p50=${p50.toFixed(1)} p95=${p95.toFixed(1)} max=${max.toFixed(1)}`);
+  if (failReasons.size > 0) {
+    const ranked = [...failReasons.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
+    console.log(`[load] top_fail_reasons=${ranked.map(([k, v]) => `${k}=${v}`).join(', ')}`);
+  }
 
   if (fail > 0) {
     throw new Error(`Load test finished with failures: fail=${fail}`);
@@ -128,4 +167,3 @@ main().catch((err) => {
   console.error('[load] FAIL', err && err.stack ? err.stack : err);
   process.exit(1);
 });
-
