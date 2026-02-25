@@ -27,8 +27,14 @@ jobs:
           TEST_COMPANY: ${{ secrets.TEST_COMPANY }}
           TEST_USERNAME: ${{ secrets.TEST_USERNAME }}
           TEST_PASSWORD: ${{ secrets.TEST_PASSWORD }}
+          TEST_COMPANY_FORBIDDEN: ${{ secrets.TEST_COMPANY_FORBIDDEN }}
           LOAD_WORKERS: ${{ secrets.LOAD_WORKERS }}
           LOAD_ROUNDS: ${{ secrets.LOAD_ROUNDS }}
           LOAD_PAUSE_MS: ${{ secrets.LOAD_PAUSE_MS }}
+          LOAD_MAX_P95_MS: ${{ secrets.LOAD_MAX_P95_MS }}
+          LOAD_MAX_REQUEST_MS: ${{ secrets.LOAD_MAX_REQUEST_MS }}
+          CHECK_TENANT_ISOLATION: "true"
+          STRICT_SESSION_CHECK: "true"
+          STRICT_ACCESS_CHECK: "true"
           STRICT_LOAD_CHECK: "true"
         run: npm run go-live:check

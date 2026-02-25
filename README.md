@@ -121,9 +121,21 @@ Variáveis úteis:
 - `BASE_URL=https://<app>.rj.r.appspot.com`
 - `ACCESS_TOKEN=<jwt_admin_valido>`
 - `TEST_COMPANY=Real Energy`
+- `TEST_COMPANY_FORBIDDEN=DMF` (empresa que o usuário de teste não deve acessar)
 - `LOAD_WORKERS=8`
 - `LOAD_ROUNDS=20`
 - `LOAD_PAUSE_MS=100`
+- `LOAD_MAX_P95_MS=2000` (opcional, 0 desativa)
+- `LOAD_MAX_REQUEST_MS=5000` (opcional, 0 desativa)
+- `STRICT_SESSION_CHECK=true` (falha se contrato de sessão estiver inconsistente)
+- `STRICT_ACCESS_CHECK=true` (falha se RBAC/tenant estiver inconsistente)
+- `STRICT_LOAD_CHECK=true` (falha se carga concorrente falhar)
+
+Checks adicionais de produção:
+```bash
+BASE_URL=... ACCESS_TOKEN=... TEST_COMPANY=... npm run check:multiuser:access:prod
+BASE_URL=... TEST_USERNAME=... TEST_PASSWORD=... npm run check:session:prod
+```
 
 ## 9) Teste de carga concorrente
 

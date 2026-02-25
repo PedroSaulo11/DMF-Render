@@ -17,6 +17,8 @@
     "smoke:health": "node scripts/smoke-health.js",
     "smoke:multiuser": "node scripts/smoke-multiuser.js",
     "smoke:prod": "node scripts/smoke-prod.js",
+    "check:multiuser:access:prod": "node scripts/check-multiuser-access-prod.js",
+    "check:session:prod": "node scripts/check-session-hardening-prod.js",
     "load:prod:multiuser": "node scripts/load-prod-multiuser.js",
     "go-live:check": "node scripts/go-live-check.js",
     "check:baseline": "npm run check:syntax && npm run check:readiness && npm run smoke:health",

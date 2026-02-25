@@ -77,6 +77,8 @@ async function main() {
   const workers = Math.max(1, Number(env('LOAD_WORKERS', '8')) || 8);
   const rounds = Math.max(1, Number(env('LOAD_ROUNDS', '20')) || 20);
   const pauseMs = Math.max(0, Number(env('LOAD_PAUSE_MS', '100')) || 100);
+  const maxP95Ms = Math.max(0, Number(env('LOAD_MAX_P95_MS', '0')) || 0);
+  const maxRequestMs = Math.max(0, Number(env('LOAD_MAX_REQUEST_MS', '0')) || 0);
 
   const latencies = [];
   let ok = 0;
@@ -160,6 +162,12 @@ async function main() {
 
   if (fail > 0) {
     throw new Error(`Load test finished with failures: fail=${fail}`);
+  }
+  if (maxP95Ms > 0 && p95 > maxP95Ms) {
+    throw new Error(`Load test p95 exceeded threshold: p95=${p95.toFixed(1)} limit=${maxP95Ms}`);
+  }
+  if (maxRequestMs > 0 && max > maxRequestMs) {
+    throw new Error(`Load test max latency exceeded threshold: max=${max.toFixed(1)} limit=${maxRequestMs}`);
   }
 }
 
