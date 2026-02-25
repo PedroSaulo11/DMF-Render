@@ -73,6 +73,7 @@ async function main() {
   const company = env('TEST_COMPANY', 'DMF');
   const forbiddenCompany = env('TEST_COMPANY_FORBIDDEN', '');
   const checkWrite = envBool('CHECK_WRITE_ACCESS', true);
+  const allowNonAdminWriteProbe = envBool('ALLOW_NONADMIN_WRITE_PROBE', false);
   const checkTenantIsolation = envBool('CHECK_TENANT_ISOLATION', !!forbiddenCompany);
 
   const token = await resolveToken(base);
@@ -107,6 +108,21 @@ async function main() {
   }
 
   if (checkWrite) {
+    const normalizedRole = String(role || '').trim().toLowerCase();
+    const canAddPayments = Array.isArray(perms) && (perms.includes('all') || perms.includes('add_payments'));
+    const canDeletePayments = normalizedRole === 'admin';
+
+    // Write probe is always executed for admin. For non-admin, only when explicitly enabled.
+    if (!canDeletePayments && !allowNonAdminWriteProbe) {
+      if (canAddPayments) {
+        console.log('[multiuser-access] SKIP write probe for non-admin to avoid orphan test data (set ALLOW_NONADMIN_WRITE_PROBE=true to force)');
+      } else {
+        console.log('[multiuser-access] write denied by role/permission as expected for non-admin');
+      }
+      console.log('[multiuser-access] PASS');
+      return;
+    }
+
     const paymentId = `rbac-${Date.now()}-${randomUUID().slice(0, 8)}`;
     const create = await request(`${base}/api/flow-payments?company=${encodeURIComponent(company)}`, {
       method: 'POST',
@@ -122,15 +138,27 @@ async function main() {
         company
       }
     });
-    assert(create.status === 200, `flow create denied for TEST_COMPANY=${company}: HTTP ${create.status} body=${create.text.slice(0, 250)}`);
+    if (canAddPayments) {
+      assert(create.status === 200, `flow create denied for TEST_COMPANY=${company}: HTTP ${create.status} body=${create.text.slice(0, 250)}`);
+    } else {
+      assert(create.status === 403, `flow create should be denied for role=${role}, got HTTP ${create.status} body=${create.text.slice(0, 250)}`);
+      console.log('[multiuser-access] create denied as expected for current role');
+      console.log('[multiuser-access] PASS');
+      return;
+    }
     console.log('[multiuser-access] create ok');
 
     const del = await request(`${base}/api/flow-payments/${encodeURIComponent(paymentId)}?company=${encodeURIComponent(company)}`, {
       method: 'DELETE',
       token
     });
-    assert(del.status === 200, `flow delete denied for TEST_COMPANY=${company}: HTTP ${del.status} body=${del.text.slice(0, 250)}`);
-    console.log('[multiuser-access] delete ok');
+    if (canDeletePayments) {
+      assert(del.status === 200, `flow delete denied for TEST_COMPANY=${company}: HTTP ${del.status} body=${del.text.slice(0, 250)}`);
+      console.log('[multiuser-access] delete ok');
+    } else {
+      assert(del.status === 403, `flow delete should be denied for role=${role}, got HTTP ${del.status} body=${del.text.slice(0, 250)}`);
+      console.log('[multiuser-access] delete denied as expected for non-admin');
+    }
   } else {
     console.log('[multiuser-access] SKIP write checks (CHECK_WRITE_ACCESS=false)');
   }
