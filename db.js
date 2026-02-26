@@ -137,6 +137,45 @@ const CenterCompanyModel = () => getSequelize().define('app_center_companies', {
   updated_at: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
 }, { timestamps: false, freezeTableName: true });
 
+function normalizeCenterKey(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function normalizeCenterLabel(value) {
+  return String(value || '').trim();
+}
+
+async function registerDiscoveredCenters(items, { transaction = null } = {}) {
+  if (!Array.isArray(items) || !items.length) return 0;
+  const Center = CenterCompanyModel();
+  const unique = new Map();
+
+  for (const item of items) {
+    const label = normalizeCenterLabel(item?.center || item?.center_label || item?.centro);
+    const key = normalizeCenterKey(item?.center_key || label);
+    if (!label || !key) continue;
+    const company = normalizeCompany(item?.company) || 'Outros';
+    if (!unique.has(key)) {
+      unique.set(key, { center_key: key, center_label: label, company, updated_at: new Date() });
+    }
+  }
+
+  const keys = Array.from(unique.keys());
+  if (!keys.length) return 0;
+
+  const existing = await Center.findAll({
+    attributes: ['center_key'],
+    where: { center_key: { [Op.in]: keys } },
+    transaction
+  });
+  const existingKeys = new Set(existing.map((row) => String(row.center_key || '').trim().toLowerCase()));
+  const toInsert = keys.filter((k) => !existingKeys.has(k)).map((k) => unique.get(k));
+  if (!toInsert.length) return 0;
+
+  await Center.bulkCreate(toInsert, { transaction });
+  return toInsert.length;
+}
+
 const BackupSnapshotModel = () => getSequelize().define('backup_snapshots', {
   id: { type: DataTypes.BIGINT, autoIncrement: true, primaryKey: true },
   created_at: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
@@ -715,6 +754,11 @@ async function replaceFlowPayments(payments, company = null) {
       return next;
     });
 
+    await registerDiscoveredCenters(
+      merged.map((item) => ({ center: item?.centro, company: item?.company })),
+      { transaction }
+    );
+
     if (company) {
       await Flow.destroy({ where: scopeWhere, transaction });
     } else {
@@ -753,6 +797,7 @@ async function upsertFlowPayment(payment) {
     created_at: createdAt || new Date(),
     updated_at: new Date()
   });
+  await registerDiscoveredCenters([{ center: payment?.centro, company }]);
 }
 
 async function updateFlowPaymentWithVersion(id, updates, expectedVersion, company = null) {
@@ -770,6 +815,9 @@ async function updateFlowPaymentWithVersion(id, updates, expectedVersion, compan
   }, { where });
   if (!count) return null;
   const row = await Flow.findOne({ where: { id, ...(company ? { company: normalizeCompany(company) || company } : {}) } });
+  if (row?.centro) {
+    await registerDiscoveredCenters([{ center: row.centro, company: row.company }]);
+  }
   return row ? row.toJSON() : null;
 }
 
@@ -781,6 +829,9 @@ async function updateFlowPayment(id, updates, company = null) {
   }
   await Flow.update({ ...updates, updated_at: new Date() }, { where });
   const row = await Flow.findOne({ where });
+  if (row?.centro) {
+    await registerDiscoveredCenters([{ center: row.centro, company: row.company }]);
+  }
   return row ? row.toJSON() : null;
 }
 
@@ -895,6 +946,12 @@ async function createFlowArchive({ id, label, payments, createdBy, count, compan
     count: Number(count) || 0,
     created_at: new Date(),
   });
+  await registerDiscoveredCenters(
+    (Array.isArray(payments) ? payments : []).map((item) => ({
+      center: item?.centro,
+      company: item?.company || company
+    }))
+  );
   return row ? row.toJSON() : null;
 }
 
@@ -924,6 +981,17 @@ async function replaceFlowArchives(archives) {
   await Archive.destroy({ where: {}, truncate: true });
   if (archives && archives.length) {
     await Archive.bulkCreate(archives);
+    const discovered = [];
+    archives.forEach((archive) => {
+      const payments = Array.isArray(archive?.payments) ? archive.payments : [];
+      payments.forEach((item) => {
+        discovered.push({
+          center: item?.centro,
+          company: item?.company || archive?.company
+        });
+      });
+    });
+    await registerDiscoveredCenters(discovered);
   }
 }
 
@@ -948,7 +1016,65 @@ async function replaceUserCompanies(userId, companies) {
 async function listCenterCompanies() {
   const Center = CenterCompanyModel();
   const rows = await Center.findAll();
-  return rows.map(r => r.toJSON());
+  const fromTable = rows.map(r => r.toJSON());
+  const merged = new Map();
+
+  fromTable.forEach((item) => {
+    const key = normalizeCenterKey(item.center_key || item.center_label);
+    const label = normalizeCenterLabel(item.center_label || item.center_key);
+    const company = normalizeCompany(item.company) || 'Outros';
+    if (!key || !label) return;
+    merged.set(key, { center_key: key, center_label: label, company, updated_at: item.updated_at || null });
+  });
+
+  try {
+    const Flow = FlowPaymentModel();
+    const payments = await Flow.findAll({
+      attributes: ['centro', 'company', 'updated_at'],
+      where: {
+        centro: { [Op.not]: null }
+      }
+    });
+    payments.forEach((item) => {
+      const label = normalizeCenterLabel(item.centro);
+      const key = normalizeCenterKey(label);
+      if (!label || !key || merged.has(key)) return;
+      const company = normalizeCompany(item.company) || 'Outros';
+      merged.set(key, {
+        center_key: key,
+        center_label: label,
+        company,
+        updated_at: item.updated_at || null
+      });
+    });
+  } catch (_) {
+    // ignore fallback errors; table values are already returned above.
+  }
+
+  try {
+    const Archive = FlowArchiveModel();
+    const archives = await Archive.findAll({ attributes: ['company', 'payments'] });
+    archives.forEach((archiveRow) => {
+      const archive = archiveRow.toJSON ? archiveRow.toJSON() : archiveRow;
+      const company = normalizeCompany(archive?.company) || 'Outros';
+      const payments = Array.isArray(archive?.payments) ? archive.payments : [];
+      payments.forEach((item) => {
+        const label = normalizeCenterLabel(item?.centro);
+        const key = normalizeCenterKey(label);
+        if (!label || !key || merged.has(key)) return;
+        merged.set(key, {
+          center_key: key,
+          center_label: label,
+          company,
+          updated_at: null
+        });
+      });
+    });
+  } catch (_) {
+    // ignore fallback errors; centers from archives are best-effort enrichment.
+  }
+
+  return Array.from(merged.values());
 }
 
 async function upsertCenterCompany(centerKey, centerLabel, company) {

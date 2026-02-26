@@ -85,7 +85,7 @@ async function tryRefreshUserSession() {
                 ...current,
                 ...data.user,
                 cargo: normalizeRole(data.user.role || current.cargo),
-                nome: data.user.name || data.user.username || current.nome,
+                nome: data.user.name || current.nome || '',
                 additionalPermissions: Array.isArray(data.user.permissions) ? data.user.permissions : (current.additionalPermissions || [])
             };
             localStorage.setItem(window.system.storageKeys.SESSION, JSON.stringify(window.system.currentUser));
@@ -343,7 +343,7 @@ class AuthManager {
                 const apiUser = {
                     ...data.user,
                     cargo: apiRole,
-                    nome: data.user.name || data.user.username,
+                    nome: data.user.name || '',
                     additionalPermissions: Array.isArray(data.user.permissions) ? data.user.permissions : []
                 };
                 localStorage.setItem('dmf_api_token', data.token);
@@ -1092,7 +1092,7 @@ class DataProcessor {
         const totalsByCompany = {};
         (this.records || []).forEach((p) => {
             const company = this.getPaymentCompany(p);
-            const center = String(p.centro || 'Sem centro').trim() || 'Sem centro';
+            const center = this.getMemoryCenterLabel(p.centro);
             const valor = Math.abs(Number(p.valor) || 0);
             if (!totalsByCompany[company]) {
                 totalsByCompany[company] = { total: 0, centers: {} };
@@ -1101,6 +1101,19 @@ class DataProcessor {
             totalsByCompany[company].centers[center] = (totalsByCompany[company].centers[center] || 0) + valor;
         });
         return totalsByCompany;
+    }
+
+    getMemoryCenterLabel(center) {
+        const raw = String(center || 'Sem centro').trim() || 'Sem centro';
+        const key = this._key(raw);
+        const current = this.normalizeCompany(this.currentCompany);
+        // Regra solicitada:
+        // - No fluxo DMF, EDISER/RECAP devem aparecer consolidados como "JFX".
+        // - No fluxo JFX, continuam separados (Ediser/Recap).
+        if (current === 'DMF' && (key === 'ediser' || key === 'recap')) {
+            return 'JFX';
+        }
+        return raw;
     }
     
     export(companyFilter = null) {
@@ -1211,7 +1224,7 @@ class DataProcessor {
             const totalsByCompany = {};
             items.forEach((p) => {
                 const company = this.getPaymentCompany(p);
-                const center = String(p.centro || 'Sem centro').trim() || 'Sem centro';
+                const center = this.getMemoryCenterLabel(p.centro);
                 const valor = Math.abs(Number(p.valor) || 0);
                 if (!totalsByCompany[company]) {
                     totalsByCompany[company] = { total: 0, centers: {} };
@@ -1352,13 +1365,22 @@ class DataProcessor {
             const data = await response.json();
             const items = Array.isArray(data.items) ? data.items : [];
             const overrides = {};
+            const discoveredCenters = [];
             items.forEach(item => {
                 const label = String(item.center_label || item.center || '').trim();
                 const key = this._key(item.center_key || label);
                 if (!label || !key) return;
                 overrides[key] = { company: item.company, label };
+                discoveredCenters.push(label);
             });
             this.centerCompanyOverrides = overrides;
+            if (discoveredCenters.length) {
+                this.costCenters = this._dedupCaseInsensitive([...(this.costCenters || []), ...discoveredCenters]);
+                localStorage.setItem(this.core.storageKeys.COST_CENTERS, JSON.stringify(this.costCenters));
+                if (window.DMF_CONTEXT) {
+                    window.DMF_CONTEXT.centrosCusto = this.costCenters;
+                }
+            }
             this.saveCenterCompanyOverrides();
             return true;
         } catch (_) {
@@ -1660,6 +1682,162 @@ class UIManager {
         }
     }
 
+    roleLabel(role) {
+        const normalized = normalizeRole(role);
+        if (normalized === 'admin') return 'Admin';
+        if (normalized === 'gestor') return 'Gestor Financeiro';
+        if (normalized === 'user') return 'Usuário';
+        if (!normalized) return 'Usuário';
+        return normalized.charAt(0).toUpperCase() + normalized.slice(1);
+    }
+
+    getCurrentUserDisplayName() {
+        const u = this.core?.currentUser || {};
+        return String(u.nome || u.name || '').trim();
+    }
+
+    renderUserBadge() {
+        const badge = document.getElementById('userRoleBadge');
+        if (!badge) return;
+        const role = this.roleLabel(this.core?.currentUser?.cargo || this.core?.currentUser?.role);
+        const name = this.getCurrentUserDisplayName();
+        badge.innerText = name ? `${role} ${name}` : role;
+    }
+
+    toggleSkeletonText(ids, enabled) {
+        ids.forEach((id) => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            el.classList.toggle('skeleton-text', !!enabled);
+        });
+    }
+
+    setDashboardSkeleton(enabled) {
+        this.toggleSkeletonText(['nextActionText', 'pendingCount', 'totalBruto', 'totalAssinados', 'totalPendentes'], enabled);
+
+        const reportCompany = document.getElementById('reportCompanyTotals');
+        const reportCenters = document.getElementById('reportCostCenters');
+        const budgetAlerts = document.getElementById('budgetAlerts');
+        const skeletonList = `
+            <div class="skeleton-item"></div>
+            <div class="skeleton-item"></div>
+            <div class="skeleton-item"></div>
+        `;
+
+        if (enabled) {
+            if (reportCompany) {
+                reportCompany.classList.add('skeleton-list');
+                reportCompany.innerHTML = skeletonList;
+            }
+            if (reportCenters) {
+                reportCenters.classList.add('skeleton-list');
+                reportCenters.innerHTML = skeletonList;
+            }
+            if (budgetAlerts) {
+                budgetAlerts.classList.add('skeleton-list');
+                budgetAlerts.innerHTML = '<div class="skeleton-item"></div>';
+            }
+            return;
+        }
+
+        [reportCompany, reportCenters, budgetAlerts].forEach((el) => {
+            if (!el) return;
+            el.classList.remove('skeleton-list');
+            if (el.querySelector('.skeleton-item')) el.innerHTML = '';
+        });
+    }
+
+    setPaymentsSkeleton(enabled) {
+        const body = document.getElementById('paymentsBody');
+        if (!body) return;
+        if (!enabled) {
+            if (body.querySelector('.skeleton-row')) {
+                body.innerHTML = '';
+            }
+            return;
+        }
+
+        const cols = document.querySelectorAll('#paymentsTable thead th').length || 10;
+        const rows = Array.from({ length: 8 }, () => {
+            const cells = Array.from({ length: cols }, () => '<td><span class="skeleton-line"></span></td>').join('');
+            return `<tr class="skeleton-row">${cells}</tr>`;
+        }).join('');
+        body.innerHTML = rows;
+    }
+
+    setAuditTableSkeleton(tab, enabled) {
+        const map = {
+            logs: { id: 'auditBody', cols: 4 },
+            logins: { id: 'auditLoginsBody', cols: 5 }
+        };
+        const conf = map[tab];
+        if (!conf) return;
+        const body = document.getElementById(conf.id);
+        if (!body) return;
+        if (!enabled) {
+            if (body.querySelector('.skeleton-row')) body.innerHTML = '';
+            return;
+        }
+        const rows = Array.from({ length: 7 }, () => {
+            const cells = Array.from({ length: conf.cols }, () => '<td><span class="skeleton-line"></span></td>').join('');
+            return `<tr class="skeleton-row">${cells}</tr>`;
+        }).join('');
+        body.innerHTML = rows;
+    }
+
+    setArchivesSkeleton(enabled) {
+        this.toggleSkeletonText(
+            ['archiveTotalCount', 'archiveSummaryRange', 'archiveTotalPayments', 'archiveTotalValue', 'archiveTotalSigned', 'archiveResultsCount'],
+            enabled
+        );
+
+        const list = document.getElementById('flowArchivesList');
+        const detail = document.getElementById('flowArchiveDetail');
+        if (enabled) {
+            if (list) {
+                list.dataset.skeleton = 'true';
+                list.innerHTML = Array.from({ length: 6 }, () => `
+                    <div class="flow-archive-card is-skeleton">
+                        <div class="skeleton-item"></div>
+                        <div class="skeleton-item"></div>
+                        <div class="skeleton-item"></div>
+                    </div>
+                `).join('');
+            }
+            if (detail) {
+                detail.dataset.skeleton = 'true';
+                detail.innerHTML = `
+                    <div class="archive-detail-skeleton">
+                        <div class="skeleton-item"></div>
+                        <div class="skeleton-item"></div>
+                        <div class="skeleton-item"></div>
+                        <div class="skeleton-item"></div>
+                    </div>
+                `;
+            }
+            return;
+        }
+
+        if (list && list.dataset.skeleton === 'true') {
+            list.innerHTML = '';
+            delete list.dataset.skeleton;
+        }
+        if (detail && detail.dataset.skeleton === 'true') {
+            detail.innerHTML = '';
+            delete detail.dataset.skeleton;
+        }
+    }
+
+    async refreshArchivesWithSkeleton(filters = {}) {
+        this.setArchivesSkeleton(true);
+        try {
+            await this.core.data.loadArchivesFromBackend(filters);
+            this.renderFlowArchivesList();
+        } finally {
+            this.setArchivesSkeleton(false);
+        }
+    }
+
     navigate(viewId, activeButton = null) {
         if (viewId === 'admin' && !this.core.admin.hasPermission(this.core.currentUser, 'admin_access')) {
             this.showAccessDenied({
@@ -1939,7 +2117,7 @@ class UIManager {
         document.getElementById('appSection').classList.remove('hidden');
         const role = normalizeRole(this.core.currentUser && (this.core.currentUser.cargo || this.core.currentUser.role));
         if (this.core.currentUser) this.core.currentUser.cargo = role;
-        document.getElementById('userRoleBadge').innerText = (role || '—').toUpperCase();
+        this.renderUserBadge();
 
         this.companyFilter = this.normalizeCompany(this.core?.data?.currentCompany || this.companyFilter || 'DMF');
         this.setCompanyFilter(this.companyFilter);
@@ -1948,6 +2126,8 @@ class UIManager {
             document.getElementById('adminMenu').classList.remove('hidden');
         }
 
+        this.setDashboardSkeleton(true);
+        this.setPaymentsSkeleton(true);
         this.loadInitialDashboardData().then(() => {
             this.renderPaymentsTable();
             this.updateStats();
@@ -1957,6 +2137,9 @@ class UIManager {
                 this.renderCompanyTotals();
                 this.renderCenterCompanyEditor();
             });
+        }).finally(() => {
+            this.setDashboardSkeleton(false);
+            this.setPaymentsSkeleton(false);
         });
         this.startBackendStatusMonitor();
         this.startSessionMonitor();
@@ -2206,11 +2389,15 @@ class UIManager {
             if (!apiUser || !this.core.currentUser) return;
             const newRole = normalizeRole(apiUser.role);
             const perms = Array.isArray(apiUser.permissions) ? apiUser.permissions : [];
-            if (newRole && newRole !== this.core.currentUser.cargo) {
-                this.core.currentUser.cargo = newRole;
-                const badge = document.getElementById('userRoleBadge');
-                if (badge) badge.innerText = newRole.toUpperCase();
+            if (newRole) this.core.currentUser.cargo = newRole;
+            const newName = String(apiUser.name || apiUser.nome || this.core.currentUser.nome || this.core.currentUser.name || '').trim();
+            if (newName) {
+                this.core.currentUser.nome = newName;
+                this.core.currentUser.name = newName;
             }
+            if (apiUser.username) this.core.currentUser.username = apiUser.username;
+            if (apiUser.email) this.core.currentUser.email = apiUser.email;
+            this.renderUserBadge();
             this.core.currentUser.additionalPermissions = perms;
             localStorage.setItem(this.core.storageKeys.SESSION, JSON.stringify(this.core.currentUser));
             this.applyRolePermissions();
@@ -2413,6 +2600,13 @@ class UIManager {
 
         if (tab === 'logins') {
             this.loadLoginAudits();
+        } else if (tab === 'logs') {
+            this.setAuditTableSkeleton('logs', true);
+            Promise.resolve().then(() => {
+                this.core?.audit?.renderLogs?.();
+            }).finally(() => {
+                this.setAuditTableSkeleton('logs', false);
+            });
         }
     }
 
@@ -2428,9 +2622,7 @@ class UIManager {
         if (activeButton) activeButton.classList.add('active');
 
         if (tab === 'history') {
-            this.core.data.loadArchivesFromBackend({ allCompanies: true }).then(() => {
-                this.renderFlowArchivesList();
-            });
+            this.refreshArchivesWithSkeleton({ allCompanies: true });
         }
     }
 
@@ -3035,6 +3227,7 @@ class UIManager {
     renderFlowArchivesList() {
         const list = document.getElementById('flowArchivesList');
         if (!list) return;
+        this.setArchivesSkeleton(false);
         const sortSelect = document.getElementById('archiveSort');
         if (sortSelect && !sortSelect.value) {
             sortSelect.value = 'newest';
@@ -3272,7 +3465,7 @@ class UIManager {
     async loadLoginAudits() {
         const body = document.getElementById('auditLoginsBody');
         if (!body) return;
-        body.innerHTML = `<tr><td colspan="5">Carregando...</td></tr>`;
+        this.setAuditTableSkeleton('logins', true);
         try {
             const response = await fetch(`${getApiBase()}/api/audit/logins`, {
                 cache: 'no-store',
@@ -3281,6 +3474,7 @@ class UIManager {
                     ...getAuthHeaders()
                 }
             });
+            this.setAuditTableSkeleton('logins', false);
             if (!response.ok) {
                 body.innerHTML = `<tr><td colspan="5">Falha ao carregar acessos.</td></tr>`;
                 return;
@@ -3305,6 +3499,7 @@ class UIManager {
                 `;
             }).join('');
         } catch (error) {
+            this.setAuditTableSkeleton('logins', false);
             body.innerHTML = `<tr><td colspan="5">Erro ao carregar acessos.</td></tr>`;
         }
     }
@@ -3495,6 +3690,7 @@ class UIManager {
     renderPaymentsTable() {
         const body = document.getElementById('paymentsBody');
         if (!body) return;
+        this.setPaymentsSkeleton(false);
 
         const canSeeQr = this.core.admin.hasPermission(this.core.currentUser, 'sign_payments') ||
             this.core.admin.hasPermission(this.core.currentUser, 'admin_access');
@@ -3602,24 +3798,25 @@ class UIManager {
 
         const rows = companies.map((company) => {
             const entry = totals[company];
-            const centers = Object.entries(entry.centers)
+            const centersRows = Object.entries(entry.centers)
                 .filter(([, total]) => total > 0)
-                .sort((a, b) => b[1] - a[1])
-                .map(([center, total]) => `
+                .map(([center, total]) => ({ center: String(center || '').trim(), total }))
+                .sort((a, b) => b.center.length - a.center.length)
+                .map((item) => `
                     <div class="company-total-row company-total-center">
-                        <span>${center}</span>
-                        <strong>R$ ${total.toLocaleString('pt-BR')}</strong>
+                        <span>${item.center}</span>
+                        <strong>R$ ${item.total.toLocaleString('pt-BR')}</strong>
                     </div>
                 `)
                 .join('');
 
             return `
                 <div class="company-total-group">
+                    ${centersRows}
                     <div class="company-total-row company-total-header">
-                        <span>${company}</span>
+                        <span>Valor Total</span>
                         <strong>R$ ${entry.total.toLocaleString('pt-BR')}</strong>
                     </div>
-                    ${centers}
                 </div>
             `;
         }).join('');
@@ -4252,9 +4449,12 @@ class AdminManager {
 
         if (this.core.currentUser && Number(this.core.currentUser.id) === Number(id)) {
             this.core.currentUser.cargo = apiUpdated?.role || normalizedUpdates.cargo || this.core.currentUser.cargo;
+            this.core.currentUser.nome = apiUpdated?.name || normalizedUpdates.nome || this.core.currentUser.nome;
+            this.core.currentUser.name = this.core.currentUser.nome;
+            this.core.currentUser.username = apiUpdated?.username || normalizedUpdates.usuario || this.core.currentUser.username;
+            this.core.currentUser.email = apiUpdated?.email || normalizedUpdates.email || this.core.currentUser.email;
             localStorage.setItem(this.core.storageKeys.SESSION, JSON.stringify(this.core.currentUser));
-            const badge = document.getElementById('userRoleBadge');
-            if (badge) badge.innerText = String(this.core.currentUser.cargo || '').toUpperCase();
+            this.core.ui.renderUserBadge();
             this.core.ui.applyRolePermissions();
             this.core.ui.enforceViewAccess();
         }
@@ -4923,10 +5123,13 @@ function initDomBindings() {
     const refreshPaymentsButton = document.getElementById('btnRefreshPayments');
     if (refreshPaymentsButton) {
         refreshPaymentsButton.addEventListener('click', function () {
+            system?.ui?.setPaymentsSkeleton?.(true);
             system?.data?.loadFromBackend?.(true).then(() => {
                 system?.ui?.renderPaymentsTable?.();
                 system?.ui?.updateStats?.();
                 system?.ui?.initCharts?.();
+            }).finally(() => {
+                system?.ui?.setPaymentsSkeleton?.(false);
             });
         });
     }
@@ -5136,9 +5339,7 @@ function initDomBindings() {
                 if (!archive) return;
                 system?.ui?.renderPaymentsTable?.();
                 system?.ui?.updateStats?.();
-                system?.data?.loadArchivesFromBackend?.().then(() => {
-                    system?.ui?.renderFlowArchivesList?.();
-                });
+                system?.ui?.refreshArchivesWithSkeleton?.();
                 const historyBtn = document.querySelector('[data-payments-tab="history"]');
                 if (historyBtn) {
                     system.ui.switchPaymentsTab('history', historyBtn);
@@ -5150,9 +5351,7 @@ function initDomBindings() {
     const refreshArchivesButton = document.getElementById('btnRefreshArchives');
     if (refreshArchivesButton) {
         refreshArchivesButton.addEventListener('click', function () {
-            system?.data?.loadArchivesFromBackend?.({ allCompanies: true }).then(() => {
-                system?.ui?.renderFlowArchivesList?.();
-            });
+            system?.ui?.refreshArchivesWithSkeleton?.({ allCompanies: true });
         });
     }
 
@@ -5214,9 +5413,7 @@ function initDomBindings() {
             const start = document.getElementById('archiveStart')?.value || '';
             const end = document.getElementById('archiveEnd')?.value || '';
             document.querySelectorAll('[data-archive-range]').forEach(btn => btn.classList.remove('active'));
-            system?.data?.loadArchivesFromBackend?.({ start, end }).then(() => {
-                system?.ui?.renderFlowArchivesList?.();
-            });
+            system?.ui?.refreshArchivesWithSkeleton?.({ start, end });
         });
     }
 
@@ -5228,9 +5425,7 @@ function initDomBindings() {
             if (startInput) startInput.value = '';
             if (endInput) endInput.value = '';
             document.querySelectorAll('[data-archive-range]').forEach(btn => btn.classList.remove('active'));
-            system?.data?.loadArchivesFromBackend?.().then(() => {
-                system?.ui?.renderFlowArchivesList?.();
-            });
+            system?.ui?.refreshArchivesWithSkeleton?.();
         });
     }
 
@@ -5274,9 +5469,7 @@ function initDomBindings() {
 
                 const start = startInput?.value || '';
                 const end = endInput?.value || '';
-                system?.data?.loadArchivesFromBackend?.({ start, end }).then(() => {
-                    system?.ui?.renderFlowArchivesList?.();
-                });
+                system?.ui?.refreshArchivesWithSkeleton?.({ start, end });
             });
         });
     }
