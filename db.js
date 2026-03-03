@@ -7,6 +7,10 @@ function getSequelize() {
   if (!sequelize) {
     const connectionString = process.env.DATABASE_URL;
     const useSSL = process.env.PG_SSL === 'true';
+    const poolMax = Number(process.env.DB_POOL_MAX || 20);
+    const poolMin = Number(process.env.DB_POOL_MIN || 2);
+    const poolAcquireMs = Number(process.env.DB_POOL_ACQUIRE_MS || 30000);
+    const poolIdleMs = Number(process.env.DB_POOL_IDLE_MS || 10000);
     if (!connectionString) {
       throw new Error('DATABASE_URL is required to initialize the database.');
     }
@@ -14,6 +18,12 @@ function getSequelize() {
     sequelize = new Sequelize(connectionString, {
       logging: false,
       dialectOptions: useSSL ? { ssl: { rejectUnauthorized: false } } : {},
+      pool: {
+        max: Number.isFinite(poolMax) ? Math.max(1, poolMax) : 20,
+        min: Number.isFinite(poolMin) ? Math.max(0, poolMin) : 2,
+        acquire: Number.isFinite(poolAcquireMs) ? Math.max(1000, poolAcquireMs) : 30000,
+        idle: Number.isFinite(poolIdleMs) ? Math.max(1000, poolIdleMs) : 10000,
+      },
     });
   }
   return sequelize;
@@ -183,6 +193,31 @@ const BackupSnapshotModel = () => getSequelize().define('backup_snapshots', {
   payload: { type: DataTypes.JSONB, allowNull: false },
 }, { timestamps: false, freezeTableName: true });
 
+async function ensurePerformanceIndexes() {
+  const db = getSequelize();
+  const dialect = String(db.getDialect() || '').toLowerCase();
+  if (!['postgres', 'sqlite'].includes(dialect)) return;
+
+  const statements = [
+    'CREATE INDEX IF NOT EXISTS idx_flow_payments_company_updated ON flow_payments(company, updated_at DESC)',
+    'CREATE INDEX IF NOT EXISTS idx_flow_payments_company_signature ON flow_payments(company, assinatura)',
+    'CREATE INDEX IF NOT EXISTS idx_flow_archives_company_created ON flow_archives(company, created_at DESC)',
+    'CREATE INDEX IF NOT EXISTS idx_audit_events_created ON audit_events(created_at DESC)',
+    'CREATE INDEX IF NOT EXISTS idx_audit_logins_created ON audit_logins(created_at DESC)',
+    'CREATE INDEX IF NOT EXISTS idx_refresh_sessions_active ON app_user_refresh_sessions(user_id, revoked_at, rotated_at, expires_at)',
+    'CREATE INDEX IF NOT EXISTS idx_user_companies_user_company ON app_user_companies(user_id, company)',
+    'CREATE INDEX IF NOT EXISTS idx_center_companies_company ON app_center_companies(company)',
+  ];
+
+  for (const sql of statements) {
+    try {
+      await db.query(sql);
+    } catch (_) {
+      // Ignore index creation failure to avoid blocking boot; DB still works without optional index.
+    }
+  }
+}
+
 async function initDb() {
   const db = getSequelize();
   const maxAttempts = Number(process.env.DB_CONNECT_RETRIES || 5);
@@ -206,6 +241,7 @@ async function initDb() {
       BackupSnapshotModel();
       WebhookModel();
       await db.sync();
+      await ensurePerformanceIndexes();
       await ensureDefaultRoles();
       dbReady = true;
       return;

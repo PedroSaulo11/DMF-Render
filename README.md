@@ -120,6 +120,11 @@ Comportamento:
 Variáveis úteis:
 - `BASE_URL=https://<app>.rj.r.appspot.com`
 - `ACCESS_TOKEN=<jwt_admin_valido>`
+- `LOGIN_LOCK_WINDOW_MS=900000`
+- `LOGIN_LOCK_MAX_ATTEMPTS=6`
+- `LOGIN_LOCK_DURATION_MS=900000`
+- `DB_POOL_MAX=20`
+- `DB_POOL_MIN=2`
 - `TEST_COMPANY=Real Energy`
 - `TEST_COMPANY_FORBIDDEN=DMF` (empresa que o usuário de teste não deve acessar)
 - `LOAD_WORKERS=8`
@@ -135,7 +140,20 @@ Checks adicionais de produção:
 ```bash
 BASE_URL=... ACCESS_TOKEN=... TEST_COMPANY=... npm run check:multiuser:access:prod
 BASE_URL=... TEST_USERNAME=... TEST_PASSWORD=... npm run check:session:prod
+BASE_URL=... ACCESS_TOKEN=... npm run check:ops:metrics:prod
 ```
+
+## 14) Métricas operacionais (admin)
+
+Endpoint:
+- `GET /api/ops/metrics` (requer `admin_access`)
+
+Inclui:
+- volume de requisições e status HTTP
+- falhas de autenticação/login
+- lockouts de login
+- uso de memória/CPU
+- sessões ativas e saúde de runtime (`db_ready`, `redis_ready`)
 
 ## 9) Teste de carga concorrente
 

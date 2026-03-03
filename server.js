@@ -1,4 +1,4 @@
-// In production (App Engine), config comes from env vars / Secret Manager.
+﻿// In production (App Engine), config comes from env vars / Secret Manager.
 // Loading `.env` in production can accidentally override secrets (e.g. DATABASE_URL).
 if (process.env.NODE_ENV !== 'production') {
   require('dotenv').config();
@@ -92,6 +92,20 @@ function normalizeRole(value) {
   return String(value || '').trim().toLowerCase();
 }
 
+function isStrongPassword(value) {
+  const password = String(value || '');
+  if (password.length < 8) return false;
+  const hasUpper = /[A-Z]/.test(password);
+  const hasLower = /[a-z]/.test(password);
+  const hasDigit = /\d/.test(password);
+  const hasSymbol = /[^A-Za-z0-9]/.test(password);
+  return hasUpper && hasLower && hasDigit && hasSymbol;
+}
+
+function passwordPolicyMessage() {
+  return 'Senha deve ter no mÃ­nimo 8 caracteres, com maiÃºscula, minÃºscula, nÃºmero e sÃ­mbolo.';
+}
+
 function envFlag(name, fallback = false) {
   const raw = process.env[name];
   if (raw === undefined || raw === null || raw === '') return !!fallback;
@@ -182,6 +196,22 @@ const runtimeStats = {
   conflictsTotal: 0,
   lastConflictAt: null
 };
+const opsMetrics = {
+  startedAt: new Date().toISOString(),
+  requestsTotal: 0,
+  responsesByStatus: {},
+  authFailures: 0,
+  loginFailures: 0,
+  loginLockouts: 0,
+  passwordPolicyRejections: 0
+};
+const LOGIN_LOCK_WINDOW_MS = Number(process.env.LOGIN_LOCK_WINDOW_MS || 15 * 60 * 1000);
+const LOGIN_LOCK_MAX_ATTEMPTS = Number(process.env.LOGIN_LOCK_MAX_ATTEMPTS || 6);
+const LOGIN_LOCK_DURATION_MS = Number(process.env.LOGIN_LOCK_DURATION_MS || 15 * 60 * 1000);
+const loginAttemptTracker = new Map();
+setInterval(() => {
+  pruneLoginAttempts();
+}, 60 * 1000).unref();
 
 function strictApiOnlyAuthEnabled() {
   return FEATURE_FLAGS.enable_strict_api_only_auth === true;
@@ -246,6 +276,57 @@ function setCookie(res, name, value, options = {}) {
 function clearAuthCookies(res) {
   setCookie(res, ACCESS_COOKIE_NAME, '', { maxAge: 0, path: '/', sameSite: 'Lax' });
   setCookie(res, REFRESH_COOKIE_NAME, '', { maxAge: 0, path: '/api/auth', sameSite: 'Strict' });
+}
+
+function getLoginAttemptKey(loginValue, ip) {
+  return `${String(loginValue || '').trim().toLowerCase()}|${String(ip || '').trim()}`;
+}
+
+function pruneLoginAttempts(now = Date.now()) {
+  for (const [key, state] of loginAttemptTracker.entries()) {
+    const expiredWindow = !state.lastFailureAt || (now - state.lastFailureAt) > LOGIN_LOCK_WINDOW_MS;
+    const lockExpired = !state.lockUntil || now >= state.lockUntil;
+    if (expiredWindow && lockExpired) {
+      loginAttemptTracker.delete(key);
+    }
+  }
+}
+
+function getLoginAttemptState(loginValue, ip) {
+  pruneLoginAttempts();
+  const key = getLoginAttemptKey(loginValue, ip);
+  const now = Date.now();
+  let state = loginAttemptTracker.get(key);
+  if (!state) {
+    state = { attempts: 0, lastFailureAt: 0, lockUntil: 0 };
+    loginAttemptTracker.set(key, state);
+  }
+  if (state.lockUntil && now >= state.lockUntil) {
+    state.lockUntil = 0;
+    state.attempts = 0;
+  }
+  if (state.lastFailureAt && (now - state.lastFailureAt) > LOGIN_LOCK_WINDOW_MS) {
+    state.attempts = 0;
+  }
+  return state;
+}
+
+function registerLoginFailure(loginValue, ip) {
+  const state = getLoginAttemptState(loginValue, ip);
+  const now = Date.now();
+  state.attempts += 1;
+  state.lastFailureAt = now;
+  if (state.attempts >= LOGIN_LOCK_MAX_ATTEMPTS) {
+    state.lockUntil = now + LOGIN_LOCK_DURATION_MS;
+    opsMetrics.loginLockouts += 1;
+    return state.lockUntil;
+  }
+  return 0;
+}
+
+function clearLoginFailures(loginValue, ip) {
+  const key = getLoginAttemptKey(loginValue, ip);
+  loginAttemptTracker.delete(key);
 }
 
 function signUserAccessToken(user) {
@@ -368,7 +449,7 @@ async function enforceCompanyAccess(req, res, next) {
     if (ALLOW_ALL_COMPANIES_WHEN_UNSET) {
       return next();
     }
-    await recordAuditEvent(req, 'COMPANY_ACCESS_DENIED', 'Nenhuma empresa liberada para o usuário.', {
+    await recordAuditEvent(req, 'COMPANY_ACCESS_DENIED', 'Nenhuma empresa liberada para o usuÃ¡rio.', {
       userId: req.user?.id || null
     });
     return res.status(403).json({ error: 'Company access not configured' });
@@ -646,9 +727,12 @@ app.use((req, res, next) => {
 
 // Monitoring: request timing and 5xx alerts
 app.use((req, res, next) => {
+  opsMetrics.requestsTotal += 1;
   const start = process.hrtime.bigint();
   res.on('finish', () => {
     const elapsedMs = Number(process.hrtime.bigint() - start) / 1e6;
+    const statusKey = String(res.statusCode || 0);
+    opsMetrics.responsesByStatus[statusKey] = (opsMetrics.responsesByStatus[statusKey] || 0) + 1;
     if (res.statusCode >= 500) {
       logger.error('ALERT_HTTP_5XX', {
         request_id: req.requestId || null,
@@ -1232,6 +1316,7 @@ async function authenticateToken(req, res, next) {
   const token = bearerToken || cookieToken; // Bearer TOKEN or HttpOnly cookie
 
   if (!token) {
+    opsMetrics.authFailures += 1;
     logger.warn('Access attempt without token', { ip: req.ip, path: req.path });
     await recordAuditEvent(req, 'AUTH_MISSING_TOKEN', `Missing token for ${req.path}`);
     return res.status(401).json({ error: 'Access token required' });
@@ -1257,6 +1342,7 @@ async function authenticateToken(req, res, next) {
     req.user = user;
     next();
   } catch (err) {
+    opsMetrics.authFailures += 1;
     logger.warn('Invalid token used', { error: err.message, ip: req.ip });
     await recordAuditEvent(req, 'AUTH_INVALID_TOKEN', `Invalid token for ${req.path}`);
     // Invalid/expired tokens should be 401 (session expired). 403 is reserved for valid tokens without access.
@@ -1270,6 +1356,7 @@ async function authenticateTokenFromQuery(req, res, next) {
   const cookieToken = httpOnlySessionEnabled() ? parseCookies(req)[ACCESS_COOKIE_NAME] : null;
   const token = (authHeader && authHeader.split(' ')[1]) || cookieToken;
   if (!token) {
+    opsMetrics.authFailures += 1;
     logger.warn('Access attempt without token', { ip: req.ip, path: req.path });
     await recordAuditEvent(req, 'AUTH_MISSING_TOKEN', `Missing token for ${req.path}`);
     return res.status(401).json({ error: 'Access token required' });
@@ -1295,6 +1382,7 @@ async function authenticateTokenFromQuery(req, res, next) {
     req.user = user;
     next();
   } catch (err) {
+    opsMetrics.authFailures += 1;
     logger.warn('Invalid token used', { error: err.message, ip: req.ip });
     await recordAuditEvent(req, 'AUTH_INVALID_TOKEN', `Invalid token for ${req.path}`);
     return res.status(401).json({ error: 'Invalid or expired token' });
@@ -1517,6 +1605,10 @@ app.post('/api/auth/register', [
     const normalizedUsername = String(username || '').trim();
     const normalizedEmail = String(email || '').trim().toLowerCase();
     const requestedRole = String(role || '').trim().toLowerCase();
+    if (!isStrongPassword(password)) {
+      opsMetrics.passwordPolicyRejections += 1;
+      return res.status(400).json({ error: passwordPolicyMessage() });
+    }
     let assignedRole = 'user';
 
     if (requestedRole && requestedRole !== 'user') {
@@ -1615,6 +1707,15 @@ app.post('/api/auth/login', [
 
     const { username, password } = req.body;
     const loginValue = String(username || '').trim();
+    const loginState = getLoginAttemptState(loginValue, req.ip);
+    if (loginState.lockUntil && Date.now() < loginState.lockUntil) {
+      opsMetrics.loginLockouts += 1;
+      const seconds = Math.max(1, Math.ceil((loginState.lockUntil - Date.now()) / 1000));
+      return res.status(429).json({
+        error: 'Too many authentication attempts',
+        message: `Muitas tentativas. Tente novamente em ${seconds}s.`
+      });
+    }
 
     if (strictApiOnlyAuthEnabled() && !isDbReady()) {
       return res.status(503).json({ error: 'Database not ready' });
@@ -1631,6 +1732,8 @@ app.post('/api/auth/login', [
       user = await getUserByUsernameOrEmail(loginValue);
     }
     if (!user) {
+      opsMetrics.loginFailures += 1;
+      registerLoginFailure(loginValue, req.ip);
       if (isDbReady()) {
         insertLoginAudit({
           username: loginValue,
@@ -1643,12 +1746,14 @@ app.post('/api/auth/login', [
       return res.status(401).json({
         error: 'Invalid credentials',
         reason: 'USER_NOT_FOUND',
-        message: 'Usuário incorreto.'
+        message: 'UsuÃ¡rio incorreto.'
       });
     }
 
     const isValidPassword = await bcrypt.compare(password, user.password_hash);
     if (!isValidPassword) {
+      opsMetrics.loginFailures += 1;
+      registerLoginFailure(loginValue, req.ip);
       if (isDbReady()) {
         insertLoginAudit({
           username: user.username,
@@ -1666,6 +1771,7 @@ app.post('/api/auth/login', [
     }
 
     // Update last login
+    clearLoginFailures(loginValue, req.ip);
     if (isDbReady()) {
       await updateLastLogin(user.id);
       insertLoginAudit({
@@ -2109,7 +2215,7 @@ app.post(
       if (existing && Number(existing.version || 0) !== expected) {
         return respondConflict(req, res, {
           code: 'FLOW_VERSION_CONFLICT',
-          message: `Conflito de versão para o pagamento ${payment.id}.`,
+          message: `Conflito de versÃ£o para o pagamento ${payment.id}.`,
           payload: {
             current: existing,
             expectedVersion: expected,
@@ -2131,7 +2237,7 @@ app.post(
           const current = await getFlowPaymentById(payment.id, company);
           return respondConflict(req, res, {
             code: 'FLOW_VERSION_CONFLICT',
-            message: `Conflito de versão para o pagamento ${payment.id}.`,
+            message: `Conflito de versÃ£o para o pagamento ${payment.id}.`,
             payload: {
               current: current || null,
               expectedVersion: expected,
@@ -2939,6 +3045,11 @@ app.get('/api/health', async (req, res) => {
       conflicts_total: runtimeStats.conflictsTotal,
       last_conflict_at: runtimeStats.lastConflictAt,
       redis_ready: isRedisReady(),
+      login_lock: {
+        window_ms: LOGIN_LOCK_WINDOW_MS,
+        max_attempts: LOGIN_LOCK_MAX_ATTEMPTS,
+        duration_ms: LOGIN_LOCK_DURATION_MS
+      },
       sse_pubsub: {
         enabled: FEATURE_FLAGS.enable_pubsub_sse === true,
         channel: FLOW_PUBSUB_CHANNEL,
@@ -2953,6 +3064,48 @@ app.get('/api/health', async (req, res) => {
     tokens: {
       conta_azul_authenticated: !!accessToken,
       conta_azul_expires_at: tokenExpiry ? new Date(tokenExpiry).toISOString() : null
+    }
+  });
+});
+
+// Operational metrics (admin-only) for production troubleshooting and scaling.
+app.get('/api/ops/metrics', authenticateToken, authorizeRole('admin'), authorizePermission('admin_access'), async (req, res) => {
+  const mem = process.memoryUsage();
+  const cpu = process.cpuUsage();
+  let activeSessions = null;
+  if (isDbReady()) {
+    try {
+      const sessions = await listActiveUserRefreshSessions(1000);
+      activeSessions = sessions.length;
+    } catch (_) {
+      activeSessions = null;
+    }
+  }
+  res.json({
+    started_at: opsMetrics.startedAt,
+    uptime_seconds: Math.floor(process.uptime()),
+    requests_total: opsMetrics.requestsTotal,
+    responses_by_status: opsMetrics.responsesByStatus,
+    auth_failures: opsMetrics.authFailures,
+    login_failures: opsMetrics.loginFailures,
+    login_lockouts: opsMetrics.loginLockouts,
+    password_policy_rejections: opsMetrics.passwordPolicyRejections,
+    active_login_trackers: loginAttemptTracker.size,
+    active_sessions: activeSessions,
+    memory: {
+      rss: mem.rss,
+      heap_used: mem.heapUsed,
+      heap_total: mem.heapTotal,
+      external: mem.external
+    },
+    cpu: {
+      user: cpu.user,
+      system: cpu.system
+    },
+    runtime: {
+      redis_ready: isRedisReady(),
+      db_ready: isDbReady(),
+      sse_subscribers: flowSubscribers.size
     }
   });
 });
@@ -3008,7 +3161,7 @@ app.put(
       const userId = Number(req.params.id);
       const companies = (req.body.companies || []).map(c => normalizeCompany(c)).filter(Boolean);
       await replaceUserCompanies(userId, Array.from(new Set(companies)));
-      await recordAuditEvent(req, 'USER_COMPANIES_UPDATED', `Empresas atualizadas para usuário ${userId}.`, {
+      await recordAuditEvent(req, 'USER_COMPANIES_UPDATED', `Empresas atualizadas para usuÃ¡rio ${userId}.`, {
         userId,
         companies
       });
@@ -3057,7 +3210,7 @@ app.put(
     const centerKey = centerLabel.toLowerCase();
     const company = String(req.body.company || '').trim();
     const saved = await upsertCenterCompany(centerKey, centerLabel, company);
-    await recordAuditEvent(req, 'CENTER_COMPANY_UPDATE', `Centro ${centerLabel} → ${company}`, {
+    await recordAuditEvent(req, 'CENTER_COMPANY_UPDATE', `Centro ${centerLabel} â†’ ${company}`, {
       center: centerLabel,
       company
     });
@@ -3172,7 +3325,7 @@ app.post('/api/auth/revoke/:id', authenticateToken, authorizeRole('admin'), auth
       await revokeUserRefreshSessionsByUser(userId);
     }
     emitEventWebhook('user_sessions_revoked', { userId, admin: req.user?.username || null });
-    await recordAuditEvent(req, 'SESSIONS_REVOKED', `Sessões revogadas para usuário ${userId}.`, {
+    await recordAuditEvent(req, 'SESSIONS_REVOKED', `SessÃµes revogadas para usuÃ¡rio ${userId}.`, {
       userId
     });
     res.json({ success: true });
@@ -3204,7 +3357,7 @@ app.post('/api/auth/revoke-self', authenticateToken, authorizeRole('user'), dist
       await revokeUserRefreshSessionsByUser(req.user?.id);
     }
     clearAuthCookies(res);
-    await recordAuditEvent(req, 'SESSIONS_REVOKED_SELF', 'Sessões revogadas pelo próprio usuário.', {
+    await recordAuditEvent(req, 'SESSIONS_REVOKED_SELF', 'SessÃµes revogadas pelo prÃ³prio usuÃ¡rio.', {
       userId: req.user?.id || null
     });
     res.json({ success: true });
@@ -3272,6 +3425,10 @@ app.put('/api/users/:id', authenticateToken, authorizeRole('admin'), authorizePe
     if (req.body.role) updates.role = req.body.role;
     if (req.body.name) updates.name = req.body.name;
     if (req.body.password) {
+      if (!isStrongPassword(req.body.password)) {
+        opsMetrics.passwordPolicyRejections += 1;
+        return res.status(400).json({ success: false, error: passwordPolicyMessage() });
+      }
       updates.password_hash = await bcrypt.hash(req.body.password, 12);
     }
 
@@ -3302,13 +3459,13 @@ app.put('/api/users/:id', authenticateToken, authorizeRole('admin'), authorizePe
       });
     }
     if (req.body.password) {
-      await recordAuditEvent(req, 'PASSWORD_RESET_ADMIN', `Senha redefinida para o usuário ${user.username}.`, {
+      await recordAuditEvent(req, 'PASSWORD_RESET_ADMIN', `Senha redefinida para o usuÃ¡rio ${user.username}.`, {
         targetUserId: user.id,
         targetUsername: user.username
       });
     }
 
-    await recordAuditEvent(req, 'USER_UPDATED', `Usuário ${user.username} atualizado.`, {
+    await recordAuditEvent(req, 'USER_UPDATED', `UsuÃ¡rio ${user.username} atualizado.`, {
       targetUserId: user.id,
       targetUsername: user.username
     });
@@ -3362,7 +3519,7 @@ app.delete('/api/users/:id', authenticateToken, authorizeRole('admin'), authoriz
       admin: req.user?.username || null
     });
 
-    await recordAuditEvent(req, 'USER_DELETED', `Usuário ${user.username} removido.`, {
+    await recordAuditEvent(req, 'USER_DELETED', `UsuÃ¡rio ${user.username} removido.`, {
       targetUserId: userId,
       targetUsername: user.username
     });
@@ -3591,3 +3748,4 @@ startServer().catch(error => {
   bootState.fatalError = error && error.message ? error.message : String(error);
   logger.error('Unexpected startup failure', { error: bootState.fatalError });
 });
+

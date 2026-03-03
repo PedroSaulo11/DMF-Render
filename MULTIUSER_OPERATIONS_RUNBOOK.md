@@ -14,11 +14,15 @@ Padronizar resposta a incidentes de produção para o cenário multiusuário sem
 ```bash
 curl -s "$BASE_URL/api/health"
 ```
-2. Confirmar autenticação do usuário de teste:
+2. Confirmar métricas operacionais:
+```bash
+BASE_URL=... ACCESS_TOKEN=... npm run check:ops:metrics:prod
+```
+3. Confirmar autenticação do usuário de teste:
 ```bash
 BASE_URL=... TEST_USERNAME=... TEST_PASSWORD=... npm run check:session:prod
 ```
-3. Confirmar RBAC + tenant:
+4. Confirmar RBAC + tenant:
 ```bash
 BASE_URL=... ACCESS_TOKEN=... TEST_COMPANY=... TEST_COMPANY_FORBIDDEN=... npm run check:multiuser:access:prod
 ```
@@ -30,6 +34,8 @@ BASE_URL=... ACCESS_TOKEN=... TEST_COMPANY=... TEST_COMPANY_FORBIDDEN=... npm ru
   - validar `REDIS_URL` secret, conectividade e flags distribuídas.
 - `create:403` no load:
   - corrigir permissões/empresa do usuário de teste (`app_user_companies` + role permissions).
+- `429` em login:
+  - verificar lockout por tentativas (`LOGIN_LOCK_MAX_ATTEMPTS`, `LOGIN_LOCK_DURATION_MS`).
 - `sse timeout` recorrente:
   - validar assinatura Redis pub/sub e latência de rede entre runner e serviço.
 

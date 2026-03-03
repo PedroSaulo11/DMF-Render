@@ -18,6 +18,7 @@
     "smoke:multiuser": "node scripts/smoke-multiuser.js",
     "smoke:prod": "node scripts/smoke-prod.js",
     "check:multiuser:access:prod": "node scripts/check-multiuser-access-prod.js",
+    "check:ops:metrics:prod": "node scripts/check-ops-metrics-prod.js",
     "check:session:prod": "node scripts/check-session-hardening-prod.js",
     "load:prod:multiuser": "node scripts/load-prod-multiuser.js",
     "go-live:check": "node scripts/go-live-check.js",

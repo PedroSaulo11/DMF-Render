@@ -71,6 +71,18 @@ function main() {
     } else {
       console.log('[go-live] SKIP check:multiuser:access:prod (ACCESS_TOKEN or TEST_USERNAME/TEST_PASSWORD not set)');
     }
+
+    if (has('ACCESS_TOKEN')) {
+      try {
+        run('npm', ['run', 'check:ops:metrics:prod']);
+      } catch (error) {
+        if (!isCi()) throw error;
+        const msg = error && error.message ? error.message : String(error);
+        console.warn(`[go-live] WARN check:ops:metrics:prod failed in CI and was downgraded to warning: ${msg}`);
+      }
+    } else {
+      console.log('[go-live] SKIP check:ops:metrics:prod (ACCESS_TOKEN not set)');
+    }
   } else {
     console.log('[go-live] SKIP smoke:prod/check:audit-fallback:prod (BASE_URL not set)');
   }
