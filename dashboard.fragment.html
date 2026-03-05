@@ -8,9 +8,14 @@
                     </div>
                 <div class="summary-actions">
                     <button id="btnQuickImport" class="btn btn-primary">Importar</button>
-                    <button id="btnQuickExport" class="btn btn-ghost">Exportar XLSX</button>
-                    <button id="btnQuickPending" class="btn btn-ghost">Ver Pendentes</button>
-                    <button id="btnQuickAddPayment" class="btn btn-primary">Novo Pagamento</button>
+                    <div class="inline-actions-menu">
+                        <button id="btnQuickActionsToggle" class="btn btn-ghost" type="button" aria-expanded="false">Mais ações</button>
+                        <div id="btnQuickActionsMenu" class="actions-menu hidden">
+                            <button id="btnQuickExport" class="btn btn-ghost" type="button">Exportar XLSX</button>
+                            <button id="btnQuickPending" class="btn btn-ghost" type="button">Ver Pendentes</button>
+                            <button id="btnQuickAddPayment" class="btn btn-ghost" type="button">Novo Pagamento</button>
+                        </div>
+                    </div>
                 </div>
             </div>
                 <div class="stats-grid dashboard-stats">
@@ -45,7 +50,7 @@
                         <div id="healthUpdated" class="ops-updated">Última verificação: —</div>
                     </div>
                     <div class="ops-panel">
-                        <h4>Alertas de Vencimento</h4>
+                        <h4>Prioridades de Hoje</h4>
                         <div id="dueAlertsSummary" class="ops-updated">Sem alertas</div>
                         <div id="dueAlertsList" class="ops-list"></div>
                     </div>

@@ -2221,8 +2221,10 @@ class UIManager {
         const body = document.getElementById('paymentsBody');
         const countEl = document.getElementById('paymentsSelectionCount');
         const selectAll = document.getElementById('paymentsSelectAll');
+        const batchBar = document.getElementById('paymentsBatchBar');
         const batchSignBtn = document.getElementById('btnBatchSignPayments');
         if (!body) return;
+        const canSign = this.core.admin.hasPermission(this.core.currentUser, 'sign_payments');
 
         const checkboxes = Array.from(body.querySelectorAll('input[data-payment-select]'));
         checkboxes.forEach((cb) => {
@@ -2235,9 +2237,13 @@ class UIManager {
         if (selectAll) {
             selectAll.checked = totalVisible > 0 && selectedVisible === totalVisible;
             selectAll.indeterminate = selectedVisible > 0 && selectedVisible < totalVisible;
+            selectAll.disabled = !canSign || totalVisible === 0;
         }
         if (countEl) countEl.textContent = `Selecionados: ${selectedVisible}`;
-        if (batchSignBtn) batchSignBtn.disabled = selectedVisible === 0;
+        if (batchBar) {
+            batchBar.classList.toggle('hidden', !canSign || selectedVisible === 0);
+        }
+        if (batchSignBtn) batchSignBtn.disabled = !canSign || selectedVisible === 0;
         this.updateAssistantFlowContext();
     }
 
@@ -3028,13 +3034,32 @@ class UIManager {
         const quickExportBtn = document.getElementById('btnQuickExport');
         const quickPendingBtn = document.getElementById('btnQuickPending');
         const quickAddBtn = document.getElementById('btnQuickAddPayment');
+        const quickActionsToggle = document.getElementById('btnQuickActionsToggle');
+        const quickActionsMenu = document.getElementById('btnQuickActionsMenu');
+        const quickActionsWrap = quickActionsToggle?.closest('.inline-actions-menu') || null;
         const paymentsBatchBar = document.getElementById('paymentsBatchBar');
         const batchSignBtn = document.getElementById('btnBatchSignPayments');
         const batchSelectPendingBtn = document.getElementById('btnSelectPendingPayments');
         const batchClearBtn = document.getElementById('btnClearPaymentSelection');
+        const paymentsActionsToggle = document.getElementById('btnPaymentsActionsToggle');
+        const paymentsActionsMenu = document.getElementById('btnPaymentsActionsMenu');
+        const paymentsActionsWrap = paymentsActionsToggle?.closest('.inline-actions-menu') || null;
         const sessionsTabButton = document.getElementById('adminSessionsTabButton');
         const sessionsTab = document.getElementById('sessionsTab');
         const canManageActiveSessions = isAdminUser(this.core.currentUser);
+        const syncActionsMenuVisibility = (wrap, toggle, menu) => {
+            if (!toggle || !menu) return;
+            const hasVisibleAction = Array
+                .from(menu.querySelectorAll('button, a'))
+                .some((el) => !el.classList.contains('hidden') && !el.disabled);
+            if (wrap) {
+                wrap.classList.toggle('hidden', !hasVisibleAction);
+            }
+            if (!hasVisibleAction) {
+                menu.classList.add('hidden');
+                toggle.setAttribute('aria-expanded', 'false');
+            }
+        };
 
         const canImport = this.core.admin.hasPermission(this.core.currentUser, 'import_payments');
         const canExport = this.core.admin.hasPermission(this.core.currentUser, 'export_payments');
@@ -3109,7 +3134,7 @@ class UIManager {
             quickAddBtn.disabled = !canAdd;
         }
         if (paymentsBatchBar) {
-            paymentsBatchBar.classList.toggle('hidden', !canSign);
+            paymentsBatchBar.classList.add('hidden');
         }
         if (batchSignBtn) {
             batchSignBtn.classList.toggle('hidden', !canSign);
@@ -3123,6 +3148,9 @@ class UIManager {
             batchClearBtn.classList.toggle('hidden', !canSign);
             batchClearBtn.disabled = !canSign;
         }
+        syncActionsMenuVisibility(quickActionsWrap, quickActionsToggle, quickActionsMenu);
+        syncActionsMenuVisibility(paymentsActionsWrap, paymentsActionsToggle, paymentsActionsMenu);
+        this.syncPaymentSelectionUi();
         if (sessionsTabButton) {
             sessionsTabButton.classList.toggle('hidden', !canManageActiveSessions);
             sessionsTabButton.disabled = !canManageActiveSessions;
@@ -3188,7 +3216,7 @@ class UIManager {
         const upcoming = alerts.filter((a) => a.deltaDays > 0).length;
         summaryEl.textContent = `Atrasados: ${overdue} | Hoje: ${todayCount} | Próximos: ${upcoming}`;
 
-        listEl.innerHTML = alerts.slice(0, 8).map((item) => `
+        listEl.innerHTML = alerts.slice(0, 5).map((item) => `
             <div class="ops-list-item">
                 <div class="ops-list-main">
                     <strong>${item.payment?.fornecedor || 'Fornecedor'}</strong>
@@ -6840,6 +6868,55 @@ function initDomBindings() {
         chatSendButton.addEventListener('click', function () {
             window.assistant?.sendMessage?.();
         });
+    }
+
+    const bindInlineActionsMenu = (toggleId, menuId) => {
+        const toggle = document.getElementById(toggleId);
+        const menu = document.getElementById(menuId);
+        if (!toggle || !menu || toggle.dataset.boundInlineActionsMenu) return;
+
+        const setOpen = (open) => {
+            menu.classList.toggle('hidden', !open);
+            toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+        };
+
+        toggle.addEventListener('click', function (event) {
+            event.preventDefault();
+            event.stopPropagation();
+            const willOpen = menu.classList.contains('hidden');
+            document.querySelectorAll('.actions-menu').forEach((candidate) => {
+                candidate.classList.add('hidden');
+            });
+            document.querySelectorAll('.inline-actions-menu > .btn[aria-expanded]').forEach((button) => {
+                button.setAttribute('aria-expanded', 'false');
+            });
+            setOpen(willOpen);
+        });
+
+        menu.addEventListener('click', function (event) {
+            const clickedAction = event.target.closest('button, a');
+            if (clickedAction) {
+                setOpen(false);
+            }
+        });
+
+        toggle.dataset.boundInlineActionsMenu = 'true';
+    };
+
+    bindInlineActionsMenu('btnQuickActionsToggle', 'btnQuickActionsMenu');
+    bindInlineActionsMenu('btnPaymentsActionsToggle', 'btnPaymentsActionsMenu');
+
+    if (!document.body.dataset.boundInlineActionsMenuDismiss) {
+        document.body.addEventListener('click', function (event) {
+            if (event.target.closest('.inline-actions-menu')) return;
+            document.querySelectorAll('.actions-menu').forEach((menu) => {
+                menu.classList.add('hidden');
+            });
+            document.querySelectorAll('.inline-actions-menu > .btn[aria-expanded]').forEach((button) => {
+                button.setAttribute('aria-expanded', 'false');
+            });
+        });
+        document.body.dataset.boundInlineActionsMenuDismiss = 'true';
     }
 
     document.querySelectorAll('[data-close-modal]').forEach(button => {

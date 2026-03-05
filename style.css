@@ -256,6 +256,28 @@ body { background: var(--bg-app); color: var(--text-primary); overflow-x: hidden
 .summary-actions .btn {
     min-width: 140px;
 }
+.inline-actions-menu {
+    position: relative;
+}
+.actions-menu {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    min-width: 220px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: #fff;
+    box-shadow: 0 10px 24px rgba(15, 23, 42, 0.14);
+    z-index: 30;
+}
+.actions-menu .btn {
+    width: 100%;
+    justify-content: flex-start;
+}
 
 .flex-header {
     display: flex;
@@ -1743,6 +1765,21 @@ tr:hover { background: #f8fbff; }
 
     .summary-actions .btn {
         flex: 1 1 140px;
+    }
+
+    .inline-actions-menu {
+        width: 100%;
+    }
+
+    .inline-actions-menu > .btn {
+        width: 100%;
+        justify-content: center;
+    }
+
+    .actions-menu {
+        left: 0;
+        right: 0;
+        min-width: 0;
     }
 
     .data-table-wrapper {

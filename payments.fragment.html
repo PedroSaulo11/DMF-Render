@@ -2,11 +2,16 @@
                 <div class="flex-header">
                     <h2 id="paymentsTitle">Fluxo de Pagamentos</h2>
                     <div class="actions">
-                        <button id="btnClearPayments" class="btn btn-danger">Remover Todo Fluxo</button>
-                        <button id="btnExportPayments" class="btn btn-ghost">Exportar XLSX</button>
                         <button id="btnImportPayments" class="btn btn-primary">Importar Conta Azul</button>
-                        <button id="btnRefreshPayments" class="btn btn-ghost">Recarregar do servidor</button>
-                        <button id="btnAddPayment" class="btn btn-primary">Adicionar Pagamento</button> <!-- ALTERADO -->
+                        <div class="inline-actions-menu">
+                            <button id="btnPaymentsActionsToggle" class="btn btn-ghost" type="button" aria-expanded="false">Mais ações</button>
+                            <div id="btnPaymentsActionsMenu" class="actions-menu hidden">
+                                <button id="btnAddPayment" class="btn btn-ghost" type="button">Adicionar Pagamento</button> <!-- ALTERADO -->
+                                <button id="btnExportPayments" class="btn btn-ghost" type="button">Exportar XLSX</button>
+                                <button id="btnRefreshPayments" class="btn btn-ghost" type="button">Recarregar do servidor</button>
+                                <button id="btnClearPayments" class="btn btn-danger" type="button">Remover Todo Fluxo</button>
+                            </div>
+                        </div>
                     </div>
                 </div>
                 <div id="flowSyncStatus" class="flow-sync-status">Sincronizando com o servidor...</div>
@@ -28,7 +33,7 @@
                         <button id="btnClearPaymentsFilter" class="btn btn-ghost">Limpar</button>
                         <div id="paymentsFilterCount" class="filter-count">Mostrando 0</div>
                     </div>
-                    <div id="paymentsBatchBar" class="payments-batch-bar">
+                    <div id="paymentsBatchBar" class="payments-batch-bar hidden">
                         <button id="btnSelectPendingPayments" class="btn btn-ghost">Selecionar Pendentes</button>
                         <button id="btnBatchSignPayments" class="btn btn-primary">Assinar Selecionados</button>
                         <button id="btnClearPaymentSelection" class="btn btn-ghost">Limpar Seleção</button>
