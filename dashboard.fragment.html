@@ -6,11 +6,13 @@
                         <div id="nextActionText" class="summary-action">Tudo certo. Nenhum pendente.</div>
                         <div class="summary-meta">Pendentes: <span id="pendingCount">0</span></div>
                     </div>
-                    <div class="summary-actions">
-                        <button id="btnQuickImport" class="btn btn-primary">Importar</button>
-                        <button id="btnQuickExport" class="btn btn-ghost">Exportar XLSX</button>
-                    </div>
+                <div class="summary-actions">
+                    <button id="btnQuickImport" class="btn btn-primary">Importar</button>
+                    <button id="btnQuickExport" class="btn btn-ghost">Exportar XLSX</button>
+                    <button id="btnQuickPending" class="btn btn-ghost">Ver Pendentes</button>
+                    <button id="btnQuickAddPayment" class="btn btn-primary">Novo Pagamento</button>
                 </div>
+            </div>
                 <div class="stats-grid dashboard-stats">
                     <div class="stat-card">
                         <div class="stat-title">Total Bruto</div>
@@ -30,6 +32,23 @@
                 </div>
                 <div class="chart-panel">
                     <canvas id="financeChart" height="100"></canvas>
+                </div>
+                <div class="ops-panels">
+                    <div class="ops-panel">
+                        <h4>Saúde do Sistema</h4>
+                        <div class="ops-grid">
+                            <div class="ops-item"><span>API</span><strong id="healthApi">—</strong></div>
+                            <div class="ops-item"><span>Banco</span><strong id="healthDb">—</strong></div>
+                            <div class="ops-item"><span>Redis</span><strong id="healthRedis">—</strong></div>
+                            <div class="ops-item"><span>Auth</span><strong id="healthAuth">—</strong></div>
+                        </div>
+                        <div id="healthUpdated" class="ops-updated">Última verificação: —</div>
+                    </div>
+                    <div class="ops-panel">
+                        <h4>Alertas de Vencimento</h4>
+                        <div id="dueAlertsSummary" class="ops-updated">Sem alertas</div>
+                        <div id="dueAlertsList" class="ops-list"></div>
+                    </div>
                 </div>
             </div>
             <div class="card dashboard-card">

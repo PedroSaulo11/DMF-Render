@@ -38,11 +38,20 @@ function hash(str) {
 }
 
 function getApiBase() {
-    if (window.DMF_API_BASE) return window.DMF_API_BASE;
-    if (!window.location || !window.location.origin || window.location.origin === 'null') {
+    if (window.DMF_API_BASE) return String(window.DMF_API_BASE).replace(/\/+$/, '');
+    const loc = window.location || null;
+    const hostname = loc && loc.hostname ? String(loc.hostname).toLowerCase() : '';
+    const origin = loc && loc.origin ? String(loc.origin) : '';
+
+    if (hostname === 'localhost' || hostname === '127.0.0.1') {
         return 'http://localhost:3001';
     }
-    return window.location.origin;
+
+    if (!origin || origin === 'null') {
+        return 'http://localhost:3001';
+    }
+
+    return origin;
 }
 
 function isLocalRuntime() {
@@ -118,6 +127,42 @@ function setBackendStatus(message, tone = 'info') {
     el.classList.remove('is-ok', 'is-warn', 'is-error', 'is-info');
     const toneClass = `is-${tone}`;
     el.classList.add(toneClass);
+}
+
+function setLoginStatus(message, tone = 'info') {
+    const el = document.getElementById('loginStatus');
+    if (!el) return;
+    el.textContent = message;
+    el.classList.remove('is-ok', 'is-warn', 'is-error', 'is-info');
+    const toneClass = `is-${tone}`;
+    el.classList.add(toneClass);
+}
+
+function setLoginBusy(isBusy) {
+    const button = document.getElementById('btnLogin');
+    if (!button) return;
+    if (!button.dataset.defaultLabel) {
+        button.dataset.defaultLabel = button.textContent || 'Acessar Sistema';
+    }
+    button.disabled = !!isBusy;
+    button.setAttribute('aria-busy', isBusy ? 'true' : 'false');
+    button.textContent = isBusy ? 'Entrando...' : button.dataset.defaultLabel;
+}
+
+async function refreshLoginRuntimeStatus() {
+    const host = (window.location && window.location.hostname) ? window.location.hostname : '';
+    const localRuntime = host === 'localhost' || host === '127.0.0.1';
+    const apiBase = getApiBase();
+    try {
+        const response = await fetch(`${apiBase}/api/health`, { method: 'GET', cache: 'no-store' });
+        if (response.ok) {
+            setLoginStatus(`Servidor conectado (${apiBase})`, 'ok');
+            return;
+        }
+        setLoginStatus('Servidor indisponível. Tentaremos autenticação local.', localRuntime ? 'warn' : 'error');
+    } catch (_) {
+        setLoginStatus('Servidor offline. Modo local disponível.', localRuntime ? 'warn' : 'error');
+    }
 }
 
 function showToast(message, type = 'info', ttl = 3500) {
@@ -328,63 +373,99 @@ class AuthManager {
     async login() {
         const input = document.getElementById('loginInput').value.trim().toLowerCase();
         const pass = document.getElementById('loginPass').value;
-
-        try {
-            const response = await fetch(`${getApiBase()}/api/auth/login`, {
-                method: 'POST',
-                credentials: 'include',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ username: input, password: pass })
-            });
-
-            if (response.ok) {
-                const data = await response.json();
-                const apiRole = normalizeRole(data.user.role);
-                const apiUser = {
-                    ...data.user,
-                    cargo: apiRole,
-                    nome: data.user.name || '',
-                    additionalPermissions: Array.isArray(data.user.permissions) ? data.user.permissions : []
-                };
-                localStorage.setItem('dmf_api_token', data.token);
-                this.setSession(apiUser);
-                return;
-            }
-            let apiErrorMessage = 'Falha na autenticação.';
-            try {
-                const err = await response.json();
-                if (err && typeof err.message === 'string' && err.message.trim()) {
-                    apiErrorMessage = err.message.trim();
-                } else if (err?.reason === 'INVALID_PASSWORD') {
-                    apiErrorMessage = 'Senha incorreta.';
-                } else if (err?.reason === 'USER_NOT_FOUND') {
-                    apiErrorMessage = 'Usuário incorreto.';
-                }
-            } catch (_) {
-                // ignore non-json responses
-            }
-            alert(apiErrorMessage);
+        let fallbackReason = null;
+        if (!input || !pass) {
+            setLoginStatus('Informe usuário e senha para continuar.', 'warn');
+            alert('Informe usuário e senha.');
             return;
-        } catch (error) {
-            console.warn('API login failed:', error.message);
-            if (!isLocalRuntime()) {
-                alert("Falha na autenticação.");
-                return;
-            }
-            console.warn('Local runtime detected, using local auth fallback.');
         }
 
-        // Verificar usuários armazenados por usuario ou email
-        const userByLogin = this.core.admin.users.find(u =>
-            (u.usuario === input || u.email === input)
-        );
-        const user = userByLogin && (userByLogin.senha === hash(pass) || userByLogin.senha === pass)
-            ? userByLogin
-            : null;
-        if (user) {
-            this.setSession(user);
-        } else {
-            alert(userByLogin ? "Senha incorreta." : "Usuário incorreto.");
+        setLoginBusy(true);
+        setLoginStatus('Validando credenciais...', 'info');
+
+        try {
+            try {
+                const response = await fetch(`${getApiBase()}/api/auth/login`, {
+                    method: 'POST',
+                    credentials: 'include',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username: input, password: pass })
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    const apiRole = normalizeRole(data.user.role);
+                    const apiUser = {
+                        ...data.user,
+                        cargo: apiRole,
+                        nome: data.user.name || '',
+                        additionalPermissions: Array.isArray(data.user.permissions) ? data.user.permissions : []
+                    };
+                    localStorage.setItem('dmf_api_token', data.token);
+                    this.setSession(apiUser);
+                    setLoginStatus('Login realizado com sucesso.', 'ok');
+                    return;
+                }
+                let apiErrorMessage = 'Falha na autenticação.';
+                try {
+                    const err = await response.json();
+                    if (err && typeof err.message === 'string' && err.message.trim()) {
+                        apiErrorMessage = err.message.trim();
+                    } else if (err?.reason === 'INVALID_PASSWORD') {
+                        apiErrorMessage = 'Senha incorreta.';
+                    } else if (err?.reason === 'USER_NOT_FOUND') {
+                        apiErrorMessage = 'Usuário incorreto.';
+                    }
+                } catch (_) {
+                    // ignore non-json responses
+                }
+                if (!isLocalRuntime()) {
+                    alert(apiErrorMessage);
+                    setLoginStatus(apiErrorMessage, 'error');
+                    return;
+                }
+                fallbackReason = `api_status_${response.status || 'unknown'}`;
+                console.warn(`API login returned ${response.status}. Trying local auth fallback.`);
+                setLoginStatus('API indisponível para login. Tentando acesso local...', 'warn');
+            } catch (error) {
+                console.warn('API login failed:', error.message);
+                if (!isLocalRuntime()) {
+                    alert("Falha na autenticação.");
+                    setLoginStatus('Falha de conexão com o servidor.', 'error');
+                    return;
+                }
+                fallbackReason = 'network_error';
+                console.warn('Local runtime detected, using local auth fallback.');
+                setLoginStatus('Servidor offline. Tentando acesso local...', 'warn');
+            }
+
+            // Verificar usuários armazenados por usuario ou email
+            const localUsers = Array.isArray(this.core?.admin?.users) ? this.core.admin.users : [];
+            const userByLogin = localUsers.find(u =>
+                (u.usuario === input || u.email === input)
+            );
+            const user = userByLogin && (userByLogin.senha === hash(pass) || userByLogin.senha === pass)
+                ? userByLogin
+                : null;
+            if (user) {
+                this.setSession(user);
+                setLoginStatus('Login local realizado com sucesso.', 'ok');
+            } else {
+                if (!userByLogin && localUsers.length === 0) {
+                    setLoginStatus('Sem usuários locais cadastrados para fallback.', 'error');
+                    alert("Sem usuários locais disponíveis para fallback.");
+                    return;
+                }
+                if (!userByLogin && fallbackReason) {
+                    setLoginStatus('Usuário não encontrado.', 'error');
+                    alert("Usuário incorreto.");
+                    return;
+                }
+                setLoginStatus(userByLogin ? 'Senha incorreta.' : 'Usuário incorreto.', 'error');
+                alert(userByLogin ? "Senha incorreta." : "Usuário incorreto.");
+            }
+        } finally {
+            setLoginBusy(false);
         }
     }
 
@@ -1666,6 +1747,8 @@ class UIManager {
         this.dashboardSyncTimer = null;
         this.pendingCenterCompanyUpdates = new Map();
         this.signatureIdCollapsed = localStorage.getItem('dmf_signature_id_collapsed') !== 'false';
+        this.paymentFilterStoragePrefix = 'dmf_payment_filters';
+        this.selectedPaymentIds = new Set();
     }
 
     getSignatureIdToggleGlyph() {
@@ -1918,7 +2001,9 @@ class UIManager {
     showLogin() {
         document.getElementById('appSection').classList.add('hidden');
         document.getElementById('loginSection').classList.remove('hidden');
+        window.omniAssistant?.setVisible?.(false);
         setupLoginVisualEffects();
+        refreshLoginRuntimeStatus().catch(() => {});
         // Ensure background timers/streams don't keep running after logout.
         this.stopFlowAutoRefresh();
         this.stopDashboardSummaryAutoRefresh();
@@ -1975,6 +2060,8 @@ class UIManager {
     initQuickActions() {
         const btnImport = document.getElementById('btnQuickImport');
         const btnExport = document.getElementById('btnQuickExport');
+        const btnPending = document.getElementById('btnQuickPending');
+        const btnAddPayment = document.getElementById('btnQuickAddPayment');
         if (btnImport) {
             btnImport.addEventListener('click', () => {
                 this.navigate('payments', document.querySelector('[data-nav="payments"]'));
@@ -1987,17 +2074,36 @@ class UIManager {
                 setTimeout(() => document.getElementById('btnExportPayments')?.click(), 50);
             });
         }
+        if (btnPending) {
+            btnPending.addEventListener('click', () => {
+                this.navigate('payments', document.querySelector('[data-nav="payments"]'));
+                this.paymentFilters.pendingOnly = true;
+                this.persistPaymentFilters();
+                this.applyPaymentFilterUiState();
+                this.renderPaymentsTable();
+                showToast('Filtro de pendentes aplicado.', 'info');
+            });
+        }
+        if (btnAddPayment) {
+            btnAddPayment.addEventListener('click', () => {
+                this.navigate('payments', document.querySelector('[data-nav="payments"]'));
+                setTimeout(() => document.getElementById('btnAddPayment')?.click(), 50);
+            });
+        }
     }
 
     initPaymentsFilters() {
         const input = document.getElementById('paymentsQuickSearch');
         const btnPending = document.getElementById('btnFilterPending');
         const btnClear = document.getElementById('btnClearPaymentsFilter');
+        this.restorePaymentFilters();
+        this.applyPaymentFilterUiState();
         if (input) {
             input.addEventListener('input', () => {
                 clearTimeout(this.paymentsFilterTimer);
                 this.paymentsFilterTimer = setTimeout(() => {
                     this.paymentFilters.query = input.value || '';
+                    this.persistPaymentFilters();
                     this.renderPaymentsTable();
                 }, 200);
             });
@@ -2006,6 +2112,7 @@ class UIManager {
             btnPending.addEventListener('click', () => {
                 this.paymentFilters.pendingOnly = !this.paymentFilters.pendingOnly;
                 btnPending.classList.toggle('is-active', this.paymentFilters.pendingOnly);
+                this.persistPaymentFilters();
                 this.renderPaymentsTable();
             });
         }
@@ -2014,9 +2121,217 @@ class UIManager {
                 this.paymentFilters = { query: '', pendingOnly: false };
                 if (input) input.value = '';
                 if (btnPending) btnPending.classList.remove('is-active');
+                this.persistPaymentFilters();
                 this.renderPaymentsTable();
             });
         }
+    }
+
+    initBatchActions() {
+        const selectPendingBtn = document.getElementById('btnSelectPendingPayments');
+        const batchSignBtn = document.getElementById('btnBatchSignPayments');
+        const clearBtn = document.getElementById('btnClearPaymentSelection');
+        const selectAll = document.getElementById('paymentsSelectAll');
+        const ctxFilterBtn = document.getElementById('assistantCtxFilterPending');
+        const ctxSelectBtn = document.getElementById('assistantCtxSelectPending');
+        const ctxSignBtn = document.getElementById('assistantCtxSignSelected');
+
+        if (selectPendingBtn) {
+            if (!selectPendingBtn.dataset.bound) {
+                selectPendingBtn.dataset.bound = 'true';
+                selectPendingBtn.addEventListener('click', () => {
+                    const rows = this.getFilteredPayments ? this.getFilteredPayments() : (this.core?.data?.records || []);
+                    const canSign = this.core.admin.hasPermission(this.core.currentUser, 'sign_payments');
+                    if (!canSign) {
+                        showToast('Você não tem permissão para assinatura em lote.', 'warn');
+                        return;
+                    }
+                    rows.forEach((p) => {
+                        if (!p?.assinatura && this.core.admin.canSignCenter(this.core.currentUser, p.centro)) {
+                            this.selectedPaymentIds.add(String(p.id));
+                        }
+                    });
+                    this.syncPaymentSelectionUi();
+                    showToast('Pendentes visíveis selecionados.', 'info');
+                });
+            }
+        }
+
+        if (batchSignBtn) {
+            if (!batchSignBtn.dataset.bound) {
+                batchSignBtn.dataset.bound = 'true';
+                batchSignBtn.addEventListener('click', async () => {
+                    await this.signSelectedPayments();
+                });
+            }
+        }
+
+        if (clearBtn) {
+            if (!clearBtn.dataset.bound) {
+                clearBtn.dataset.bound = 'true';
+                clearBtn.addEventListener('click', () => {
+                    this.selectedPaymentIds.clear();
+                    this.syncPaymentSelectionUi();
+                });
+            }
+        }
+
+        if (selectAll && !selectAll.dataset.bound) {
+            selectAll.dataset.bound = 'true';
+            selectAll.addEventListener('change', () => {
+                const checked = !!selectAll.checked;
+                const rows = this.getFilteredPayments ? this.getFilteredPayments() : (this.core?.data?.records || []);
+                rows.forEach((p) => {
+                    const id = String(p?.id || '');
+                    if (!id) return;
+                    if (checked) {
+                        this.selectedPaymentIds.add(id);
+                    } else {
+                        this.selectedPaymentIds.delete(id);
+                    }
+                });
+                this.syncPaymentSelectionUi();
+            });
+        }
+        if (ctxFilterBtn && !ctxFilterBtn.dataset.bound) {
+            ctxFilterBtn.dataset.bound = 'true';
+            ctxFilterBtn.addEventListener('click', () => {
+                this.paymentFilters.pendingOnly = true;
+                this.persistPaymentFilters();
+                this.applyPaymentFilterUiState();
+                this.renderPaymentsTable();
+            });
+        }
+        if (ctxSelectBtn && !ctxSelectBtn.dataset.bound) {
+            ctxSelectBtn.dataset.bound = 'true';
+            ctxSelectBtn.addEventListener('click', () => {
+                document.getElementById('btnSelectPendingPayments')?.click();
+            });
+        }
+        if (ctxSignBtn && !ctxSignBtn.dataset.bound) {
+            ctxSignBtn.dataset.bound = 'true';
+            ctxSignBtn.addEventListener('click', () => {
+                document.getElementById('btnBatchSignPayments')?.click();
+            });
+        }
+        this.updateAssistantFlowContext();
+    }
+
+    syncPaymentSelectionUi() {
+        const body = document.getElementById('paymentsBody');
+        const countEl = document.getElementById('paymentsSelectionCount');
+        const selectAll = document.getElementById('paymentsSelectAll');
+        const batchSignBtn = document.getElementById('btnBatchSignPayments');
+        if (!body) return;
+
+        const checkboxes = Array.from(body.querySelectorAll('input[data-payment-select]'));
+        checkboxes.forEach((cb) => {
+            const id = String(cb.getAttribute('data-payment-select') || '');
+            cb.checked = this.selectedPaymentIds.has(id);
+        });
+
+        const totalVisible = checkboxes.length;
+        const selectedVisible = checkboxes.filter((cb) => cb.checked).length;
+        if (selectAll) {
+            selectAll.checked = totalVisible > 0 && selectedVisible === totalVisible;
+            selectAll.indeterminate = selectedVisible > 0 && selectedVisible < totalVisible;
+        }
+        if (countEl) countEl.textContent = `Selecionados: ${selectedVisible}`;
+        if (batchSignBtn) batchSignBtn.disabled = selectedVisible === 0;
+        this.updateAssistantFlowContext();
+    }
+
+    async signSelectedPayments() {
+        if (!this.selectedPaymentIds.size) {
+            showToast('Selecione pagamentos para assinar.', 'warn');
+            return;
+        }
+        const canSign = this.core.admin.hasPermission(this.core.currentUser, 'sign_payments');
+        if (!canSign) {
+            showToast('Você não tem permissão para assinatura em lote.', 'warn');
+            return;
+        }
+
+        const ids = Array.from(this.selectedPaymentIds);
+        let ok = 0;
+        let fail = 0;
+        for (const id of ids) {
+            try {
+                const done = await this.core.data.sign(id);
+                if (done) ok += 1;
+                else fail += 1;
+            } catch (_) {
+                fail += 1;
+            }
+        }
+        this.selectedPaymentIds.clear();
+        this.syncPaymentSelectionUi();
+        this.renderPaymentsTable();
+        this.updateStats();
+        showToast(`Lote concluído: ${ok} assinado(s), ${fail} com falha.`, fail ? 'warn' : 'success');
+        this.updateAssistantFlowContext();
+    }
+
+    updateAssistantFlowContext() {
+        const textEl = document.getElementById('assistantFlowContextText');
+        const panelEl = document.getElementById('assistantFlowContext');
+        const signBtn = document.getElementById('assistantCtxSignSelected');
+        if (!textEl || !panelEl) return;
+        const currentTab = document.getElementById('paymentsCurrentTab');
+        const show = !!currentTab && !currentTab.classList.contains('hidden');
+        panelEl.classList.toggle('hidden', !show);
+        if (!show) return;
+
+        const records = this.getFilteredPayments ? this.getFilteredPayments() : (this.core?.data?.records || []);
+        const pending = records.filter((p) => !p?.assinatura).length;
+        const selected = this.selectedPaymentIds.size;
+        const total = records.length;
+        textEl.textContent = `Empresa ${this.companyFilter}: ${pending} pendente(s) em ${total} item(ns) visíveis. Selecionados: ${selected}.`;
+        if (signBtn) signBtn.disabled = selected === 0;
+    }
+
+    getPaymentFilterStorageKey(company = null) {
+        const rawUser = this.core?.currentUser?.id
+            || this.core?.currentUser?.email
+            || this.core?.currentUser?.username
+            || 'guest';
+        const safeUser = String(rawUser).trim().toLowerCase().replace(/[^a-z0-9@._-]+/g, '_');
+        const safeCompany = String(this.normalizeCompany(company || this.companyFilter || 'DMF'))
+            .trim()
+            .toLowerCase()
+            .replace(/[^a-z0-9@._-]+/g, '_');
+        return `${this.paymentFilterStoragePrefix}_${safeUser}_${safeCompany}`;
+    }
+
+    persistPaymentFilters() {
+        try {
+            const key = this.getPaymentFilterStorageKey();
+            const payload = {
+                query: String(this.paymentFilters?.query || ''),
+                pendingOnly: !!this.paymentFilters?.pendingOnly
+            };
+            localStorage.setItem(key, JSON.stringify(payload));
+        } catch (_) {}
+    }
+
+    restorePaymentFilters() {
+        try {
+            const key = this.getPaymentFilterStorageKey();
+            const raw = localStorage.getItem(key);
+            if (!raw) return;
+            const parsed = JSON.parse(raw);
+            this.paymentFilters = {
+                query: String(parsed?.query || ''),
+                pendingOnly: !!parsed?.pendingOnly
+            };
+        } catch (_) {}
+    }
+
+    applyPaymentFilterUiState() {
+        const input = document.getElementById('paymentsQuickSearch');
+        const btnPending = document.getElementById('btnFilterPending');
+        if (input) input.value = String(this.paymentFilters?.query || '');
+        if (btnPending) btnPending.classList.toggle('is-active', !!this.paymentFilters?.pendingOnly);
     }
 
     normalizeCompany(value) {
@@ -2029,10 +2344,14 @@ class UIManager {
 
     setCompanyFilter(company) {
         this.companyFilter = this.normalizeCompany(company);
+        this.selectedPaymentIds.clear();
+        this.restorePaymentFilters();
+        this.applyPaymentFilterUiState();
         const title = document.getElementById('paymentsTitle');
         if (title) {
             title.textContent = `Fluxo de Pagamentos ${this.companyFilter}`;
         }
+        this.syncPaymentSelectionUi();
     }
 
     initAuditFilters() {
@@ -2139,6 +2458,7 @@ class UIManager {
         teardownLoginVisualEffects();
         document.getElementById('loginSection').classList.add('hidden');
         document.getElementById('appSection').classList.remove('hidden');
+        window.omniAssistant?.setVisible?.(true);
         const role = normalizeRole(this.core.currentUser && (this.core.currentUser.cargo || this.core.currentUser.role));
         if (this.core.currentUser) this.core.currentUser.cargo = role;
         this.renderUserBadge();
@@ -2173,6 +2493,7 @@ class UIManager {
         this.populateBudgetInputs();
         this.initQuickActions();
         this.initPaymentsFilters();
+        this.initBatchActions();
         this.initAuditFilters();
         this.syncCurrentUserRole();
         this.applyInitialRouteFromUrl();
@@ -2285,16 +2606,20 @@ class UIManager {
                 const response = await fetch(`${getApiBase()}/api/health`, { method: 'GET', cache: 'no-store' });
                 if (!response.ok) {
                     setBackendStatus('Servidor: indisponível', 'error');
+                    this.renderRuntimeHealth(null, `HTTP ${response.status}`);
                     return;
                 }
                 const data = await response.json();
                 if (data && data.db_ready === false) {
                     setBackendStatus(`Servidor: online (banco iniciando)`, 'warn');
+                    this.renderRuntimeHealth(data);
                     return;
                 }
                 setBackendStatus(`Servidor: online (${formatTimeNow()})`, 'ok');
+                this.renderRuntimeHealth(data);
             } catch (_) {
                 setBackendStatus('Servidor: indisponível', 'error');
+                this.renderRuntimeHealth(null, 'erro de rede');
             }
         };
         check();
@@ -2701,6 +3026,12 @@ class UIManager {
         const revokeSelfBtn = document.getElementById('btnRevokeSelf');
         const quickImportBtn = document.getElementById('btnQuickImport');
         const quickExportBtn = document.getElementById('btnQuickExport');
+        const quickPendingBtn = document.getElementById('btnQuickPending');
+        const quickAddBtn = document.getElementById('btnQuickAddPayment');
+        const paymentsBatchBar = document.getElementById('paymentsBatchBar');
+        const batchSignBtn = document.getElementById('btnBatchSignPayments');
+        const batchSelectPendingBtn = document.getElementById('btnSelectPendingPayments');
+        const batchClearBtn = document.getElementById('btnClearPaymentSelection');
         const sessionsTabButton = document.getElementById('adminSessionsTabButton');
         const sessionsTab = document.getElementById('sessionsTab');
         const canManageActiveSessions = isAdminUser(this.core.currentUser);
@@ -2769,6 +3100,29 @@ class UIManager {
             quickExportBtn.classList.toggle('hidden', !canExport);
             quickExportBtn.disabled = !canExport;
         }
+        if (quickPendingBtn) {
+            quickPendingBtn.classList.toggle('hidden', !canSign);
+            quickPendingBtn.disabled = !canSign;
+        }
+        if (quickAddBtn) {
+            quickAddBtn.classList.toggle('hidden', !canAdd);
+            quickAddBtn.disabled = !canAdd;
+        }
+        if (paymentsBatchBar) {
+            paymentsBatchBar.classList.toggle('hidden', !canSign);
+        }
+        if (batchSignBtn) {
+            batchSignBtn.classList.toggle('hidden', !canSign);
+            if (!canSign) batchSignBtn.disabled = true;
+        }
+        if (batchSelectPendingBtn) {
+            batchSelectPendingBtn.classList.toggle('hidden', !canSign);
+            batchSelectPendingBtn.disabled = !canSign;
+        }
+        if (batchClearBtn) {
+            batchClearBtn.classList.toggle('hidden', !canSign);
+            batchClearBtn.disabled = !canSign;
+        }
         if (sessionsTabButton) {
             sessionsTabButton.classList.toggle('hidden', !canManageActiveSessions);
             sessionsTabButton.disabled = !canManageActiveSessions;
@@ -2783,6 +3137,98 @@ class UIManager {
                 this.switchAdminTab('users', fallbackButton);
             }
         }
+    }
+
+    renderDueAlerts() {
+        const summaryEl = document.getElementById('dueAlertsSummary');
+        const listEl = document.getElementById('dueAlertsList');
+        if (!summaryEl || !listEl) return;
+
+        const records = Array.isArray(this.core?.data?.records) ? this.core.data.records : [];
+        const pendingWithDate = records
+            .filter((p) => !p?.assinatura)
+            .map((p) => {
+                const date = this.core?.data?.parsePaymentDate?.(p?.data);
+                return date ? { payment: p, date } : null;
+            })
+            .filter(Boolean);
+
+        const today = new Date();
+        const startToday = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+        const msDay = 24 * 60 * 60 * 1000;
+
+        const alerts = pendingWithDate.map(({ payment, date }) => {
+            const due = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+            const deltaDays = Math.round((due.getTime() - startToday.getTime()) / msDay);
+            let tone = 'ok';
+            let label = 'No prazo';
+            if (deltaDays < 0) {
+                tone = 'error';
+                label = `Atrasado ${Math.abs(deltaDays)}d`;
+            } else if (deltaDays === 0) {
+                tone = 'warn';
+                label = 'Vence hoje';
+            } else if (deltaDays <= 3) {
+                tone = 'warn';
+                label = `Vence em ${deltaDays}d`;
+            }
+            return { payment, date: due, deltaDays, tone, label };
+        }).filter((item) => item.deltaDays <= 3);
+
+        alerts.sort((a, b) => a.date.getTime() - b.date.getTime());
+
+        if (!alerts.length) {
+            summaryEl.textContent = 'Sem alertas de vencimento próximos.';
+            listEl.innerHTML = '<div class="ops-empty">Nenhum pagamento pendente vencendo nos próximos 3 dias.</div>';
+            return;
+        }
+
+        const overdue = alerts.filter((a) => a.deltaDays < 0).length;
+        const todayCount = alerts.filter((a) => a.deltaDays === 0).length;
+        const upcoming = alerts.filter((a) => a.deltaDays > 0).length;
+        summaryEl.textContent = `Atrasados: ${overdue} | Hoje: ${todayCount} | Próximos: ${upcoming}`;
+
+        listEl.innerHTML = alerts.slice(0, 8).map((item) => `
+            <div class="ops-list-item">
+                <div class="ops-list-main">
+                    <strong>${item.payment?.fornecedor || 'Fornecedor'}</strong>
+                    <span>${item.payment?.data || 'Sem data'} • R$ ${Number(item.payment?.valor || 0).toLocaleString('pt-BR')}</span>
+                </div>
+                <span class="ops-tag is-${item.tone}">${item.label}</span>
+            </div>
+        `).join('');
+    }
+
+    renderRuntimeHealth(health = null, error = null) {
+        const apiEl = document.getElementById('healthApi');
+        const dbEl = document.getElementById('healthDb');
+        const redisEl = document.getElementById('healthRedis');
+        const authEl = document.getElementById('healthAuth');
+        const updatedEl = document.getElementById('healthUpdated');
+        if (!apiEl || !dbEl || !redisEl || !authEl || !updatedEl) return;
+
+        const set = (el, text, tone) => {
+            el.textContent = text;
+            el.classList.remove('is-ok', 'is-warn', 'is-error');
+            if (tone) el.classList.add(`is-${tone}`);
+        };
+
+        if (!health) {
+            set(apiEl, 'Offline', 'error');
+            set(dbEl, '—', 'warn');
+            set(redisEl, '—', 'warn');
+            set(authEl, '—', 'warn');
+            updatedEl.textContent = `Última verificação: falha (${error || 'sem resposta'})`;
+            return;
+        }
+
+        set(apiEl, 'Online', 'ok');
+        set(dbEl, health.db_ready ? 'Pronto' : 'Inicializando', health.db_ready ? 'ok' : 'warn');
+        const redisReady = health?.runtime?.redis_ready === true;
+        set(redisEl, redisReady ? 'Pronto' : 'Indisponível', redisReady ? 'ok' : 'warn');
+        const authOk = health?.tokens?.conta_azul_authenticated === true;
+        set(authEl, authOk ? 'Conectado' : 'Pendente', authOk ? 'ok' : 'warn');
+        updatedEl.textContent = `Última verificação: ${formatTimeNow()}`;
     }
 
     renderUsersTable() {
@@ -3843,6 +4289,10 @@ class UIManager {
             if (aTime !== bTime) return aTime - bTime;
             return String(a?.id || '').localeCompare(String(b?.id || ''));
         });
+        const visibleIds = new Set(rows.map((p) => String(p?.id || '')));
+        this.selectedPaymentIds.forEach((id) => {
+            if (!visibleIds.has(id)) this.selectedPaymentIds.delete(id);
+        });
 
         body.innerHTML = rows.map(p => {
             const assinaturaTime = p.assinatura?.dataISO
@@ -3852,18 +4302,23 @@ class UIManager {
                 ? `Assinado por: ${p.assinatura.usuarioNome}` // ALTERADO
                 : '-'; // ALTERADO
 
-        const canSign = this.core.admin.hasPermission(this.core.currentUser, 'sign_payments');
-        const canSignCenter = this.core.admin.canSignCenter(this.core.currentUser, p.centro);
-        const acoesHtml = p.assinatura
-            ? '<span>Assinado</span>' // manter simples, sem CSS novo // ALTERADO
-            : (canSign && canSignCenter ? `<button class="btn btn-primary" data-payment-action="sign" data-payment-id="${p.id}">Assinar</button>` : '—'); // ALTERADO
+            const canSign = this.core.admin.hasPermission(this.core.currentUser, 'sign_payments');
+            const canSignCenter = this.core.admin.canSignCenter(this.core.currentUser, p.centro);
+            const acoesHtml = p.assinatura
+                ? '<span>Assinado</span>' // manter simples, sem CSS novo // ALTERADO
+                : (canSign && canSignCenter ? `<button class="btn btn-primary" data-payment-action="sign" data-payment-id="${p.id}">Assinar</button>` : '—'); // ALTERADO
             const qrHtml = (canSeeQr && p.assinatura?.hash)
                 ? `<a class="btn btn-ghost btn-verify" href="${publicBase}${p.assinatura.hash}" target="_blank" rel="noopener">Verificar</a>`
                 : '';
+            const paymentId = String(p?.id || '');
+            const checked = this.selectedPaymentIds.has(paymentId) ? 'checked' : '';
 
             const rowClass = p.assinatura ? 'payment-row-signed' : '';
             return `
                 <tr class="${rowClass}">
+                    <td class="col-select">
+                        <input type="checkbox" data-payment-select="${paymentId}" ${checked} aria-label="Selecionar pagamento ${paymentId}">
+                    </td>
                     <td><strong>${p.fornecedor || ''}</strong></td>
                     <td>${p.data || ''}</td>
                     <td>${(p.descricao || '').trim() || '—'}</td>
@@ -3894,6 +4349,7 @@ class UIManager {
         this.renderSignatureQrCodes && this.renderSignatureQrCodes();
         this.updateFlowStatusBadges && this.updateFlowStatusBadges();
         this.syncSignatureIdToggleState();
+        this.syncPaymentSelectionUi();
 
         if (!body.dataset.boundPayments) {
             body.addEventListener('click', (event) => {
@@ -3904,6 +4360,15 @@ class UIManager {
                 if (action === 'sign' && id) {
                     this.core?.data?.sign?.(id);
                 }
+            });
+            body.addEventListener('change', (event) => {
+                const checkbox = event.target.closest('input[data-payment-select]');
+                if (!checkbox) return;
+                const id = String(checkbox.getAttribute('data-payment-select') || '');
+                if (!id) return;
+                if (checkbox.checked) this.selectedPaymentIds.add(id);
+                else this.selectedPaymentIds.delete(id);
+                this.syncPaymentSelectionUi();
             });
             body.dataset.boundPayments = 'true';
         }
@@ -3924,6 +4389,7 @@ class UIManager {
         document.getElementById('totalAssinados').innerText = signed;
         document.getElementById('totalPendentes').innerText = pending;
         this.updateDashboardSummary && this.updateDashboardSummary(pending);
+        this.renderDueAlerts();
     }
 
     renderCompanyTotals() {
@@ -5144,13 +5610,20 @@ class SystemAssistant {
         this.quickPromptsEl = null;
         this.history = [];
         this.maxHistory = 80;
+        this.storageKey = 'dmf_assistant_history_v2';
         this.learning = new Map();
+        this.isSending = false;
+        this.typingMessageId = null;
         this.quickPrompts = [
             'Resumo da empresa atual',
             'Quantos pagamentos pendentes?',
+            'Alertas de vencimento',
+            'Saúde do sistema',
             'Top 5 centros de custo',
             'Ir para fluxo DMF',
             'Mostrar somente pendentes',
+            'Selecionar pendentes',
+            'Assinar selecionados',
             'Recarregar pagamentos',
             'Exportar fluxo atual',
             'Arquivar fluxo atual'
@@ -5163,6 +5636,7 @@ class SystemAssistant {
         this.quickPromptsEl = document.getElementById('chatQuickPrompts');
         if (!this.messagesEl || !this.inputEl) return;
         this.renderQuickPrompts();
+        this.restoreHistory();
 
         const clearBtn = document.getElementById('chatClearBtn');
         if (clearBtn && !clearBtn.dataset.boundAssistantClear) {
@@ -5180,7 +5654,88 @@ class SystemAssistant {
         }
         if (!this.messagesEl.dataset.assistantBoot) {
             this.messagesEl.dataset.assistantBoot = 'true';
-            this.addMessage('assistant', `Assistente pronto. Empresa atual: ${this.getCurrentCompany()}.`);
+            if (!this.history.length) {
+                this.addMessage('assistant', `Assistente pronto. Empresa atual: ${this.getCurrentCompany()}. Digite "ajuda" para ver comandos.`);
+            }
+        }
+        if (!this.messagesEl.dataset.boundAssistantActions) {
+            this.messagesEl.dataset.boundAssistantActions = 'true';
+            this.messagesEl.addEventListener('click', (event) => {
+                const btn = event.target.closest('button[data-assistant-command]');
+                if (!btn) return;
+                const command = String(btn.getAttribute('data-assistant-command') || '').trim();
+                if (!command) return;
+                this.executeCommand(command, { echoUser: false }).catch(() => {});
+            });
+        }
+    }
+
+    getUserScopeKey(suffix) {
+        const rawUser = this.core?.currentUser?.id
+            || this.core?.currentUser?.email
+            || this.core?.currentUser?.username
+            || 'guest';
+        const safe = String(rawUser).trim().toLowerCase().replace(/[^a-z0-9@._-]+/g, '_');
+        return `dmf_assistant_${suffix}_${safe}`;
+    }
+
+    getUserPreferences() {
+        try {
+            const raw = localStorage.getItem(this.getUserScopeKey('prefs'));
+            const parsed = raw ? JSON.parse(raw) : {};
+            return parsed && typeof parsed === 'object' ? parsed : {};
+        } catch (_) {
+            return {};
+        }
+    }
+
+    setUserPreferences(prefs) {
+        try {
+            localStorage.setItem(this.getUserScopeKey('prefs'), JSON.stringify(prefs || {}));
+        } catch (_) {}
+    }
+
+    rememberInteraction(text, analysis = null) {
+        const prefs = this.getUserPreferences();
+        prefs.last_company = this.getCurrentCompany();
+        prefs.last_query = String(text || '').slice(0, 220);
+        prefs.last_intent = analysis?.intent || null;
+        prefs.last_topic = analysis?.topic || null;
+        prefs.last_at = new Date().toISOString();
+        prefs.commands_count = Number(prefs.commands_count || 0) + 1;
+        this.setUserPreferences(prefs);
+    }
+
+    auditAssistantAction(action, detail, metadata = null) {
+        try {
+            this.core?.audit?.log?.('ASSISTENTE', `${action}: ${detail}`, 'assistente', null);
+            registrarEvento('assistente_acao', this.core?.currentUser || null, `${action}: ${detail}`, 'assistente');
+            if (metadata && window.DMF_CONTEXT) {
+                window.DMF_CONTEXT.assistant_last_action = { action, detail, metadata, at: new Date().toISOString() };
+            }
+        } catch (_) {}
+    }
+
+    persistHistory() {
+        try {
+            const safe = (this.history || []).slice(-this.maxHistory);
+            localStorage.setItem(this.storageKey, JSON.stringify(safe));
+        } catch (_) {}
+    }
+
+    restoreHistory() {
+        if (!this.messagesEl) return;
+        try {
+            const raw = localStorage.getItem(this.storageKey);
+            const parsed = raw ? JSON.parse(raw) : [];
+            if (!Array.isArray(parsed) || !parsed.length) return;
+            this.history = [];
+            this.messagesEl.innerHTML = '';
+            parsed.forEach((item) => {
+                this.addMessage(item.role === 'user' ? 'user' : 'assistant', item.text || '', { persist: false });
+            });
+        } catch (_) {
+            this.history = [];
         }
     }
 
@@ -5203,9 +5758,10 @@ class SystemAssistant {
         this.history = [];
         if (this.messagesEl) this.messagesEl.innerHTML = '';
         this.addMessage('assistant', 'Conversa limpa.');
+        this.persistHistory();
     }
 
-    addMessage(role, text) {
+    addMessage(role, text, options = {}) {
         if (!this.messagesEl) return;
         const safeRole = role === 'user' ? 'user' : 'assistant';
         const wrap = document.createElement('div');
@@ -5214,10 +5770,86 @@ class SystemAssistant {
         bubble.className = 'chat-bubble';
         bubble.textContent = String(text || '');
         wrap.appendChild(bubble);
+        if (Array.isArray(options.actions) && options.actions.length) {
+            const actionsWrap = document.createElement('div');
+            actionsWrap.className = 'chat-actions';
+            options.actions.slice(0, 4).forEach((action) => {
+                const label = String(action?.label || '').trim();
+                const command = String(action?.command || '').trim();
+                if (!label || !command) return;
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'chat-action-btn';
+                btn.textContent = label;
+                btn.setAttribute('data-assistant-command', command);
+                actionsWrap.appendChild(btn);
+            });
+            if (actionsWrap.childElementCount > 0) {
+                wrap.appendChild(actionsWrap);
+            }
+        }
         this.messagesEl.appendChild(wrap);
         this.messagesEl.scrollTop = this.messagesEl.scrollHeight;
         this.history.push({ role: safeRole, text: String(text || ''), at: Date.now() });
         if (this.history.length > this.maxHistory) this.history.shift();
+        if (options.persist !== false) this.persistHistory();
+    }
+
+    setSendingState(isSending) {
+        this.isSending = !!isSending;
+        const sendBtn = document.getElementById('chatSendBtn');
+        if (sendBtn) {
+            if (!sendBtn.dataset.defaultLabel) sendBtn.dataset.defaultLabel = sendBtn.textContent || 'Enviar';
+            sendBtn.disabled = this.isSending;
+            sendBtn.textContent = this.isSending ? 'Processando...' : sendBtn.dataset.defaultLabel;
+        }
+        if (this.inputEl) this.inputEl.disabled = this.isSending;
+    }
+
+    showTyping() {
+        if (!this.messagesEl) return null;
+        const id = `typing-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const wrap = document.createElement('div');
+        wrap.className = 'chat-message assistant typing';
+        wrap.dataset.typingId = id;
+        const bubble = document.createElement('div');
+        bubble.className = 'chat-bubble';
+        bubble.textContent = 'Pensando...';
+        wrap.appendChild(bubble);
+        this.messagesEl.appendChild(wrap);
+        this.messagesEl.scrollTop = this.messagesEl.scrollHeight;
+        return id;
+    }
+
+    hideTyping(id) {
+        if (!id || !this.messagesEl) return;
+        const node = this.messagesEl.querySelector(`[data-typing-id="${id}"]`);
+        if (node) node.remove();
+    }
+
+    getDueSummary() {
+        const records = this.getCurrentRecords();
+        const parser = this.core?.data?.parsePaymentDate?.bind(this.core.data);
+        if (!parser) return { overdue: 0, today: 0, soon: 0, totalTracked: 0 };
+        const now = new Date();
+        const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const msDay = 24 * 60 * 60 * 1000;
+        let overdue = 0;
+        let today = 0;
+        let soon = 0;
+        let totalTracked = 0;
+        records.forEach((p) => {
+            if (p?.assinatura) return;
+            const d = parser(p?.data);
+            if (!d) return;
+            totalTracked += 1;
+            const due = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+            const diff = Math.round((due.getTime() - start.getTime()) / msDay);
+            if (diff < 0) overdue += 1;
+            else if (diff === 0) today += 1;
+            else if (diff <= 3) soon += 1;
+        });
+        return { overdue, today, soon, totalTracked };
     }
 
     getCurrentCompany() {
@@ -5242,6 +5874,18 @@ class SystemAssistant {
             const center = String(p?.centro || 'Sem centro').trim() || 'Sem centro';
             const value = Math.abs(Number(p?.valor) || 0);
             totals.set(center, (totals.get(center) || 0) + value);
+        });
+        return Array.from(totals.entries())
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, limit);
+    }
+
+    getTopSuppliers(limit = 5) {
+        const totals = new Map();
+        this.getCurrentRecords().forEach((p) => {
+            const supplier = String(p?.fornecedor || 'Sem fornecedor').trim() || 'Sem fornecedor';
+            const value = Math.abs(Number(p?.valor) || 0);
+            totals.set(supplier, (totals.get(supplier) || 0) + value);
         });
         return Array.from(totals.entries())
             .sort((a, b) => b[1] - a[1])
@@ -5275,6 +5919,155 @@ class SystemAssistant {
             .trim();
     }
 
+    analyzeQuestion(text) {
+        const normalized = this.normalizeText(text);
+        const has = (list) => list.some((k) => normalized.includes(k));
+        const company = this.resolveCompanyFromText(normalized) || this.getCurrentCompany();
+        const intent = has(['quantos', 'quanto', 'total', 'numero', 'valor', 'somatorio', 'soma', 'estatistica'])
+            ? 'quantify'
+            : has(['como', 'passo', 'tutorial', 'explica', 'ensina', 'me orienta'])
+                ? 'howto'
+                : has(['por que', 'porque', 'erro', 'falha', 'bug', 'problema', 'nao funciona', 'travou', 'lento'])
+                    ? 'diagnose'
+                    : has(['ir para', 'abrir', 'mudar', 'mostrar', 'navegar'])
+                        ? 'navigate'
+                        : 'general';
+        const topic = has(['pendente', 'assinar', 'assinatura']) ? 'pending'
+            : has(['venc', 'atras', 'hoje', 'amanha', 'prazo']) ? 'due'
+                : has(['centro']) ? 'centers'
+                    : has(['fornecedor']) ? 'suppliers'
+                        : has(['saude', 'status', 'sistema', 'api', 'banco', 'redis']) ? 'health'
+                            : has(['import']) ? 'import'
+                                : has(['export']) ? 'export'
+                                    : has(['checklist', 'rotina diaria', 'diario', 'daily']) ? 'checklist'
+                                    : has(['auditoria', 'log']) ? 'audit'
+                                        : 'summary';
+        return { normalized, intent, topic, company };
+    }
+
+    buildActionSuggestions(analysis = null) {
+        const topic = analysis?.topic || 'summary';
+        const base = [
+            { label: 'Resumo', command: 'resumo da empresa atual' },
+            { label: 'Saúde', command: 'saúde do sistema' }
+        ];
+        if (topic === 'pending' || topic === 'due') {
+            return [
+                { label: 'Mostrar Pendentes', command: 'mostrar somente pendentes' },
+                { label: 'Selecionar Pendentes', command: 'selecionar pendentes' },
+                { label: 'Assinar Selecionados', command: 'assinar selecionados' },
+                ...base
+            ];
+        }
+        if (topic === 'health') {
+            return [
+                { label: 'Recarregar', command: 'recarregar pagamentos' },
+                { label: 'Checklist Diário', command: 'checklist diario' },
+                ...base
+            ];
+        }
+        if (topic === 'centers') {
+            return [
+                { label: 'Top Centros', command: 'top 5 centros de custo' },
+                { label: 'Mostrar Pendentes', command: 'mostrar somente pendentes' },
+                ...base
+            ];
+        }
+        return [
+            { label: 'Pendentes', command: 'quantos pagamentos pendentes' },
+            { label: 'Vencimentos', command: 'alertas de vencimento' },
+            { label: 'Checklist Diário', command: 'checklist diario' },
+            ...base
+        ];
+    }
+
+    normalizeAssistantResult(result, analysis = null) {
+        if (result && typeof result === 'object') {
+            const text = String(result.text || '').trim() || 'Sem resposta.';
+            const actions = Array.isArray(result.actions) ? result.actions : this.buildActionSuggestions(analysis);
+            return { text, actions };
+        }
+        return {
+            text: String(result || 'Sem resposta.'),
+            actions: this.buildActionSuggestions(analysis)
+        };
+    }
+
+    async buildAnalyticalFallback(text) {
+        const analysis = this.analyzeQuestion(text);
+        const company = analysis.company;
+        const prefs = this.getUserPreferences();
+        const stats = this.getCurrentStats();
+        const due = this.getDueSummary();
+        const topCenters = this.getTopCenters(3);
+        const topSuppliers = this.getTopSuppliers(3);
+
+        if (analysis.topic === 'health' || analysis.intent === 'diagnose') {
+            try {
+                const response = await fetch(`${getApiBase()}/api/health`, { method: 'GET', cache: 'no-store' });
+                if (response.ok) {
+                    const health = await response.json();
+                    const db = health?.db_ready ? 'pronto' : 'inicializando';
+                    const redis = health?.runtime?.redis_ready ? 'pronto' : 'indisponível';
+                    const auth = health?.tokens?.conta_azul_authenticated ? 'conectado' : 'pendente';
+                    return [
+                        `Análise: você perguntou sobre estado/erro do sistema em ${company}.`,
+                        `Situação atual: API online, banco ${db}, redis ${redis}, Conta Azul ${auth}.`,
+                        'Se quiser, eu aplico ações agora: "recarregar pagamentos", "mostrar somente pendentes" ou "saúde do sistema".'
+                    ].join('\n');
+                }
+            } catch (_) {}
+            return [
+                `Análise: você parece estar investigando um problema em ${company}.`,
+                'Não consegui consultar a saúde do backend neste momento.',
+                'Sugestão imediata: execute "recarregar pagamentos" e depois "saúde do sistema".'
+            ].join('\n');
+        }
+
+        if (analysis.intent === 'howto') {
+            if (analysis.topic === 'import') {
+                return 'Como importar: abra Fluxo de Pagamentos > "Importar Conta Azul" > selecione o arquivo. Eu também posso acionar isso com o comando "importar".';
+            }
+            if (analysis.topic === 'export') {
+                return 'Como exportar: abra Fluxo de Pagamentos > "Exportar XLSX". Também posso acionar por comando: "exportar fluxo atual".';
+            }
+            if (analysis.topic === 'pending') {
+                return 'Para assinar mais rápido: use "mostrar somente pendentes", depois "selecionar pendentes" e por fim "assinar selecionados".';
+            }
+            return 'Posso te guiar por comandos práticos. Digite "ajuda" e eu te mostro as ações disponíveis.';
+        }
+
+        if (analysis.topic === 'pending' || analysis.topic === 'due' || analysis.intent === 'quantify') {
+            return [
+                `Análise de ${company}: ${stats.count} registro(s), ${stats.pending} pendente(s), ${stats.signed} assinado(s), total R$ ${stats.total.toLocaleString('pt-BR')}.`,
+                `Vencimentos monitorados: atrasados ${due.overdue}, hoje ${due.today}, próximos 3 dias ${due.soon}.`,
+                'Quer que eu aplique algo agora? Ex.: "mostrar somente pendentes".'
+            ].join('\n');
+        }
+
+        if (analysis.topic === 'centers' && topCenters.length) {
+            return [
+                `Top centros em ${company}:`,
+                ...topCenters.map((item, idx) => `${idx + 1}. ${item[0]} - R$ ${item[1].toLocaleString('pt-BR')}`),
+                'Posso abrir o fluxo e filtrar pendentes se quiser.'
+            ].join('\n');
+        }
+
+        if (analysis.topic === 'suppliers' && topSuppliers.length) {
+            return [
+                `Top fornecedores em ${company}:`,
+                ...topSuppliers.map((item, idx) => `${idx + 1}. ${item[0]} - R$ ${item[1].toLocaleString('pt-BR')}`)
+            ].join('\n');
+        }
+
+        return [
+            `Análise da pergunta concluída para ${company}.`,
+            `Resumo atual: total R$ ${stats.total.toLocaleString('pt-BR')}, pendentes ${stats.pending}, assinados ${stats.signed}.`,
+            prefs?.last_company ? `Última empresa usada por você: ${prefs.last_company}.` : 'Posso adaptar pela empresa que você preferir.',
+            'Se quiser uma ação direta, posso executar: "recarregar pagamentos", "mostrar somente pendentes", "saúde do sistema" ou "exportar fluxo atual".'
+        ].join('\n');
+    }
+
     resolveCompanyFromText(text) {
         const normalized = this.normalizeText(text);
         if (/\breal\s*energy\b|\brealenergy\b|\breal\b/.test(normalized)) return 'Real Energy';
@@ -5295,6 +6088,8 @@ class SystemAssistant {
         if (this.core?.ui?.paymentFilters) {
             this.core.ui.paymentFilters.query = '';
             this.core.ui.paymentFilters.pendingOnly = false;
+            this.core?.ui?.persistPaymentFilters?.();
+            this.core?.ui?.applyPaymentFilterUiState?.();
         }
         const quickSearchInput = document.getElementById('paymentsQuickSearch');
         if (quickSearchInput) quickSearchInput.value = '';
@@ -5307,6 +6102,7 @@ class SystemAssistant {
 
     setPendingFilter(enabled) {
         this.core.ui.paymentFilters.pendingOnly = !!enabled;
+        this.core?.ui?.persistPaymentFilters?.();
         const pendingBtn = document.getElementById('btnFilterPending');
         if (pendingBtn) pendingBtn.classList.toggle('is-active', !!enabled);
         this.core?.ui?.renderPaymentsTable?.();
@@ -5343,12 +6139,48 @@ class SystemAssistant {
     async runCommand(text) {
         const normalized = this.normalizeText(text);
         const company = this.getCurrentCompany();
+        const analysis = this.analyzeQuestion(text);
+        this.rememberInteraction(text, analysis);
+
+        if (
+            normalized === 'ajuda' ||
+            normalized.includes('comandos') ||
+            normalized.includes('o que voce faz') ||
+            normalized.includes('o que voce pode')
+        ) {
+            return {
+                text: [
+                'Comandos úteis:',
+                '- resumo da empresa atual',
+                '- quantos pagamentos pendentes',
+                '- alertas de vencimento',
+                '- saúde do sistema',
+                '- ir para fluxo dmf/jfx/real energy',
+                '- mostrar somente pendentes',
+                '- selecionar pendentes',
+                '- assinar selecionados',
+                '- recarregar pagamentos',
+                '- exportar fluxo atual',
+                '- checklist diario'
+            ].join('\n'),
+                actions: [
+                    { label: 'Resumo', command: 'resumo da empresa atual' },
+                    { label: 'Pendentes', command: 'quantos pagamentos pendentes' },
+                    { label: 'Checklist Diário', command: 'checklist diario' }
+                ]
+            };
+        }
 
         if (normalized.includes('ir para fluxo') || normalized.includes('abrir fluxo') || normalized.includes('mudar fluxo')) {
             const target = this.resolveCompanyFromText(normalized);
             if (!target) return 'Informe a empresa no comando: DMF, JFX ou Real Energy.';
             await this.goToCompanyFlow(target);
             return `Fluxo de Pagamentos ${target} aberto.`;
+        }
+        if (normalized.includes('dashboard') || normalized.includes('abrir painel')) {
+            this.core?.ui?.navigate?.('dashboard', document.querySelector('[data-nav="dashboard"]'));
+            this.auditAssistantAction('NAVEGACAO', 'Dashboard aberto');
+            return { text: 'Dashboard aberto.', actions: this.buildActionSuggestions(analysis) };
         }
         if (normalized.includes('somente pendente') || normalized.includes('mostrar pendente') || normalized.includes('filtrar pendente')) {
             const currentTabBtn = document.querySelector('[data-payments-tab="current"]');
@@ -5359,6 +6191,72 @@ class SystemAssistant {
                 return 'Não há pagamentos pendentes de assinatura em DMF, JFX ou Real Energy no momento.';
             }
             return `Filtro aplicado: ${result.pending} pendente(s) em ${result.company} (mostrando ${result.pending} de ${result.total}).`;
+        }
+        if (normalized.includes('selecionar pendente')) {
+            this.core?.ui?.navigate?.('payments', document.querySelector('[data-nav="payments"]'));
+            document.getElementById('btnSelectPendingPayments')?.click();
+            this.auditAssistantAction('LOTE', 'Selecionou pendentes');
+            return { text: 'Seleção de pendentes aplicada no fluxo atual.', actions: this.buildActionSuggestions(analysis) };
+        }
+        if (normalized.includes('assinar selecionado') || normalized.includes('assinar em lote')) {
+            this.core?.ui?.navigate?.('payments', document.querySelector('[data-nav="payments"]'));
+            document.getElementById('btnBatchSignPayments')?.click();
+            this.auditAssistantAction('LOTE', 'Assinatura em lote disparada');
+            return { text: 'Assinatura em lote iniciada para os itens selecionados.', actions: this.buildActionSuggestions(analysis) };
+        }
+        if (normalized.includes('limpar selecao')) {
+            document.getElementById('btnClearPaymentSelection')?.click();
+            return 'Seleção de pagamentos limpa.';
+        }
+        if (normalized.includes('saude') || normalized.includes('status sistema')) {
+            try {
+                const response = await fetch(`${getApiBase()}/api/health`, { method: 'GET', cache: 'no-store' });
+                if (!response.ok) return `Saúde do sistema indisponível (HTTP ${response.status}).`;
+                const health = await response.json();
+                const api = 'online';
+                const db = health?.db_ready ? 'pronto' : 'inicializando';
+                const redis = health?.runtime?.redis_ready ? 'pronto' : 'indisponível';
+                const auth = health?.tokens?.conta_azul_authenticated ? 'conectado' : 'pendente';
+                return `Saúde atual: API ${api}, banco ${db}, redis ${redis}, Conta Azul ${auth}.`;
+            } catch (_) {
+                return 'Não consegui consultar a saúde do sistema agora.';
+            }
+        }
+        if (normalized.includes('alerta') && normalized.includes('venc')) {
+            const d = this.getDueSummary();
+            if (!d.totalTracked) return 'Não há pagamentos pendentes com data válida para monitorar vencimento.';
+            return {
+                text: `Vencimentos: atrasados ${d.overdue}, vencendo hoje ${d.today}, próximos 3 dias ${d.soon}.`,
+                actions: this.buildActionSuggestions({ topic: 'due' })
+            };
+        }
+        if (normalized.includes('checklist') || normalized.includes('rotina diaria') || normalized.includes('daily')) {
+            const stats = this.getCurrentStats();
+            const due = this.getDueSummary();
+            let healthText = 'não disponível';
+            try {
+                const response = await fetch(`${getApiBase()}/api/health`, { method: 'GET', cache: 'no-store' });
+                if (response.ok) {
+                    const health = await response.json();
+                    healthText = `api online, banco ${health?.db_ready ? 'pronto' : 'inicializando'}, redis ${health?.runtime?.redis_ready ? 'pronto' : 'indisponível'}`;
+                }
+            } catch (_) {}
+            const textOut = [
+                `Checklist diário (${company}):`,
+                `1) Saúde: ${healthText}.`,
+                `2) Fluxo: ${stats.count} registros, ${stats.pending} pendentes, ${stats.signed} assinados.`,
+                `3) Vencimentos: atrasados ${due.overdue}, hoje ${due.today}, próximos 3 dias ${due.soon}.`,
+                '4) Ações sugeridas: filtrar pendentes, selecionar pendentes, assinar selecionados.'
+            ].join('\n');
+            this.auditAssistantAction('CHECKLIST', `Checklist diário executado (${company})`);
+            return {
+                text: textOut,
+                actions: [
+                    { label: 'Mostrar Pendentes', command: 'mostrar somente pendentes' },
+                    { label: 'Selecionar Pendentes', command: 'selecionar pendentes' },
+                    { label: 'Assinar Selecionados', command: 'assinar selecionados' }
+                ]
+            };
         }
         if (normalized.includes('arquivar fluxo') || normalized.includes('armazenar fluxo')) {
             const isAdmin = isAdminUser(this.core?.currentUser);
@@ -5420,21 +6318,290 @@ class SystemAssistant {
         if (known && known.size) {
             return Array.from(known)[0];
         }
-        return `Não entendi completamente. Tente: "Resumo da empresa atual", "Quantos pendentes?" ou "Top 5 centros".`;
+        const fallback = await this.buildAnalyticalFallback(text);
+        return {
+            text: fallback,
+            actions: this.buildActionSuggestions(analysis)
+        };
+    }
+
+    async executeCommand(text, { echoUser = true } = {}) {
+        this.init();
+        const query = String(text || '').trim();
+        if (!query || this.isSending) return;
+        this.setSendingState(true);
+        if (echoUser) this.addMessage('user', query);
+        const typingId = this.showTyping();
+        try {
+            const analysis = this.analyzeQuestion(query);
+            const raw = await this.runCommand(query);
+            const normalized = this.normalizeAssistantResult(raw, analysis);
+            this.hideTyping(typingId);
+            this.addMessage('assistant', normalized.text, { actions: normalized.actions });
+            this.auditAssistantAction('CONSULTA', query, { intent: analysis?.intent || null, topic: analysis?.topic || null });
+        } catch (_) {
+            this.hideTyping(typingId);
+            this.addMessage('assistant', 'Falha ao executar comando no assistente.');
+        } finally {
+            this.setSendingState(false);
+            if (this.inputEl) this.inputEl.focus();
+        }
     }
 
     async sendMessage() {
-        this.init();
         const raw = this.inputEl ? this.inputEl.value : '';
         const text = String(raw || '').trim();
         if (!text) return;
         this.inputEl.value = '';
-        this.addMessage('user', text);
+        await this.executeCommand(text, { echoUser: true });
+    }
+}
+
+class OmnipresentAssistantDock {
+    constructor(core, assistant) {
+        this.core = core;
+        this.assistant = assistant;
+        this.dockEl = null;
+        this.panelEl = null;
+        this.suggestionsEl = null;
+        this.messagesEl = null;
+        this.inputEl = null;
+        this.sendBtn = null;
+        this.isSending = false;
+        this.storageKey = 'dmf_omni_assistant_history_v1';
+        this.maxHistory = 40;
+        this.history = [];
+    }
+
+    init() {
+        this.dockEl = document.getElementById('omniAssistantDock');
+        this.panelEl = document.getElementById('omniAssistantPanel');
+        this.suggestionsEl = document.getElementById('omniAssistantSuggestions');
+        this.messagesEl = document.getElementById('omniAssistantMessages');
+        this.inputEl = document.getElementById('omniAssistantInput');
+        this.sendBtn = document.getElementById('omniAssistantSend');
+        if (!this.dockEl || !this.panelEl || !this.messagesEl || !this.inputEl || !this.sendBtn) return;
+
+        this.restoreHistory();
+        if (!this.history.length) {
+            this.addMessage('assistant', 'Assistente rápido ativo. Use Alt+A para abrir/fechar.', { persist: false });
+        }
+
+        const fab = document.getElementById('omniAssistantFab');
+        if (fab && !fab.dataset.boundOmni) {
+            fab.dataset.boundOmni = 'true';
+            fab.addEventListener('click', () => this.togglePanel());
+        }
+
+        const closeBtn = document.getElementById('omniAssistantClose');
+        if (closeBtn && !closeBtn.dataset.boundOmni) {
+            closeBtn.dataset.boundOmni = 'true';
+            closeBtn.addEventListener('click', () => this.closePanel());
+        }
+
+        const openFullBtn = document.getElementById('omniAssistantOpenFull');
+        if (openFullBtn && !openFullBtn.dataset.boundOmni) {
+            openFullBtn.dataset.boundOmni = 'true';
+            openFullBtn.addEventListener('click', () => this.openFullAssistant());
+        }
+
+        this.renderSuggestions();
+        if (this.suggestionsEl && !this.suggestionsEl.dataset.boundOmni) {
+            this.suggestionsEl.dataset.boundOmni = 'true';
+            this.suggestionsEl.addEventListener('click', (event) => {
+                const btn = event.target.closest('button[data-omni-command]');
+                if (!btn) return;
+                const command = String(btn.getAttribute('data-omni-command') || '').trim();
+                if (!command) return;
+                this.executeCommand(command, { echoUser: true }).catch(() => {});
+            });
+        }
+
+        if (!this.sendBtn.dataset.boundOmni) {
+            this.sendBtn.dataset.boundOmni = 'true';
+            this.sendBtn.addEventListener('click', () => this.sendMessage());
+        }
+
+        if (!this.inputEl.dataset.boundOmni) {
+            this.inputEl.dataset.boundOmni = 'true';
+            this.inputEl.addEventListener('keydown', (event) => {
+                if (event.key === 'Enter') {
+                    event.preventDefault();
+                    this.sendMessage();
+                }
+            });
+        }
+
+        if (!document.body.dataset.boundOmniHotkey) {
+            document.body.dataset.boundOmniHotkey = 'true';
+            document.addEventListener('keydown', (event) => {
+                if (!(event.altKey && String(event.key || '').toLowerCase() === 'a')) return;
+                const target = event.target;
+                const isTyping = target && (
+                    target.tagName === 'INPUT' ||
+                    target.tagName === 'TEXTAREA' ||
+                    target.isContentEditable
+                );
+                if (isTyping) return;
+                event.preventDefault();
+                this.togglePanel();
+            });
+        }
+        if (!document.body.dataset.boundOmniContext) {
+            document.body.dataset.boundOmniContext = 'true';
+            document.body.addEventListener('click', () => {
+                setTimeout(() => this.renderSuggestions(), 0);
+            });
+        }
+
+        const app = document.getElementById('appSection');
+        this.setVisible(!!app && !app.classList.contains('hidden'));
+    }
+
+    getCurrentViewId() {
+        const current = document.querySelector('.view:not(.hidden)');
+        return current?.id || 'dashboard';
+    }
+
+    getContextPrompts() {
+        const view = this.getCurrentViewId();
+        if (view === 'payments') {
+            return [
+                'quantos pagamentos pendentes',
+                'alertas de vencimento',
+                'selecionar pendentes',
+                'assinar selecionados'
+            ];
+        }
+        if (view === 'dashboard') {
+            return [
+                'resumo da empresa atual',
+                'checklist diario',
+                'saúde do sistema'
+            ];
+        }
+        if (view === 'audit') {
+            return [
+                'abrir auditoria',
+                'saúde do sistema',
+                'resumo da empresa atual'
+            ];
+        }
+        return [
+            'resumo da empresa atual',
+            'quantos pagamentos pendentes',
+            'saúde do sistema'
+        ];
+    }
+
+    renderSuggestions() {
+        if (!this.suggestionsEl) return;
+        const prompts = this.getContextPrompts();
+        this.suggestionsEl.innerHTML = prompts.map((p) => {
+            const label = p
+                .replace(/\s+/g, ' ')
+                .trim()
+                .replace(/^./, (c) => c.toUpperCase());
+            return `<button type="button" class="chat-quick-btn" data-omni-command="${p}">${label}</button>`;
+        }).join('');
+    }
+
+    setVisible(visible) {
+        if (!this.dockEl) return;
+        this.dockEl.classList.toggle('hidden', !visible);
+        if (!visible) this.closePanel();
+    }
+
+    togglePanel() {
+        if (!this.panelEl) return;
+        const open = this.panelEl.classList.contains('hidden');
+        this.panelEl.classList.toggle('hidden', !open);
+        if (open) this.inputEl?.focus();
+    }
+
+    closePanel() {
+        if (!this.panelEl) return;
+        this.panelEl.classList.add('hidden');
+    }
+
+    openFullAssistant() {
+        this.core?.ui?.navigate?.('assistente', document.querySelector('[data-nav="assistente"]'));
+        this.closePanel();
+        const input = document.getElementById('chatInput');
+        if (input) input.focus();
+    }
+
+    setSendingState(isSending) {
+        this.isSending = !!isSending;
+        if (this.sendBtn) {
+            if (!this.sendBtn.dataset.defaultLabel) this.sendBtn.dataset.defaultLabel = this.sendBtn.textContent || 'Enviar';
+            this.sendBtn.disabled = this.isSending;
+            this.sendBtn.textContent = this.isSending ? '...' : this.sendBtn.dataset.defaultLabel;
+        }
+        if (this.inputEl) this.inputEl.disabled = this.isSending;
+    }
+
+    addMessage(role, text, options = {}) {
+        if (!this.messagesEl) return;
+        const safeRole = role === 'user' ? 'user' : 'assistant';
+        const wrap = document.createElement('div');
+        wrap.className = `chat-message ${safeRole}`;
+        const bubble = document.createElement('div');
+        bubble.className = 'chat-bubble';
+        bubble.textContent = String(text || '');
+        wrap.appendChild(bubble);
+        this.messagesEl.appendChild(wrap);
+        this.messagesEl.scrollTop = this.messagesEl.scrollHeight;
+        this.history.push({ role: safeRole, text: String(text || ''), at: Date.now() });
+        if (this.history.length > this.maxHistory) this.history.shift();
+        if (options.persist !== false) this.persistHistory();
+    }
+
+    persistHistory() {
         try {
-            const reply = await this.runCommand(text);
-            this.addMessage('assistant', reply);
-        } catch (error) {
-            this.addMessage('assistant', 'Falha ao executar comando no assistente.');
+            localStorage.setItem(this.storageKey, JSON.stringify(this.history.slice(-this.maxHistory)));
+        } catch (_) {}
+    }
+
+    restoreHistory() {
+        if (!this.messagesEl) return;
+        try {
+            const raw = localStorage.getItem(this.storageKey);
+            const parsed = raw ? JSON.parse(raw) : [];
+            if (!Array.isArray(parsed) || !parsed.length) return;
+            this.history = [];
+            this.messagesEl.innerHTML = '';
+            parsed.forEach((item) => this.addMessage(item.role, item.text, { persist: false }));
+        } catch (_) {
+            this.history = [];
+        }
+    }
+
+    async sendMessage() {
+        const text = String(this.inputEl?.value || '').trim();
+        if (!text || this.isSending) return;
+        this.inputEl.value = '';
+        await this.executeCommand(text, { echoUser: true });
+    }
+
+    async executeCommand(text, { echoUser = true } = {}) {
+        const query = String(text || '').trim();
+        if (!query || this.isSending) return;
+        this.setSendingState(true);
+        if (echoUser) this.addMessage('user', query);
+        try {
+            const analysis = this.assistant?.analyzeQuestion?.(query) || null;
+            const raw = await Promise.resolve(this.assistant?.runCommand?.(query));
+            const normalized = this.assistant?.normalizeAssistantResult?.(raw, analysis) || {
+                text: String(raw || 'Sem resposta para este comando.'),
+                actions: []
+            };
+            this.addMessage('assistant', normalized.text);
+        } catch (_) {
+            this.addMessage('assistant', 'Falha ao executar comando.');
+        } finally {
+            this.setSendingState(false);
+            this.inputEl?.focus();
         }
     }
 }
@@ -5540,6 +6707,16 @@ function initDomBindings() {
             system?.auth?.login?.();
         });
     }
+    const loginInput = document.getElementById('loginInput');
+    const loginPass = document.getElementById('loginPass');
+    const tryLoginOnEnter = function (event) {
+        if (event.key !== 'Enter') return;
+        event.preventDefault();
+        system?.auth?.login?.();
+    };
+    if (loginInput) loginInput.addEventListener('keydown', tryLoginOnEnter);
+    if (loginPass) loginPass.addEventListener('keydown', tryLoginOnEnter);
+    refreshLoginRuntimeStatus().catch(() => {});
     setupLoginVisualEffects();
 
     const logoutButton = document.getElementById('btnLogout');
@@ -6080,6 +7257,9 @@ window.system = system;
 const assistant = new SystemAssistant(system);
 window.assistant = assistant;
 assistant.init();
+const omniAssistant = new OmnipresentAssistantDock(system, assistant);
+window.omniAssistant = omniAssistant;
+omniAssistant.init();
 
 if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', initDomBindings);

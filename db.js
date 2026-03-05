@@ -260,6 +260,11 @@ function isDbReady() {
   return dbReady;
 }
 
+function caseInsensitiveOp() {
+  const dialect = String(getSequelize().getDialect() || '').toLowerCase();
+  return dialect === 'postgres' ? Op.iLike : Op.like;
+}
+
 function mapUser(row) {
   if (!row) return null;
   return {
@@ -277,11 +282,12 @@ function mapUser(row) {
 async function getUserByUsernameOrEmail(value) {
   const User = UserModel();
   const lookup = String(value || '').trim();
+  const op = caseInsensitiveOp();
   const row = await User.findOne({
     where: {
       [Op.or]: [
-        { username: { [Op.iLike]: lookup } },
-        { email: { [Op.iLike]: lookup } }
+        { username: { [op]: lookup } },
+        { email: { [op]: lookup } }
       ]
     }
   });
@@ -298,14 +304,15 @@ async function findUserByUsernameOrEmailExcludingId(username, email, excludeId) 
   const User = UserModel();
   const usernameLookup = username ? String(username).trim() : null;
   const emailLookup = email ? String(email).trim() : null;
+  const op = caseInsensitiveOp();
   const row = await User.findOne({
     where: {
       [Op.and]: [
         { id: { [Op.ne]: excludeId } },
         {
           [Op.or]: [
-            usernameLookup ? { username: { [Op.iLike]: usernameLookup } } : null,
-            emailLookup ? { email: { [Op.iLike]: emailLookup } } : null
+            usernameLookup ? { username: { [op]: usernameLookup } } : null,
+            emailLookup ? { email: { [op]: emailLookup } } : null
           ].filter(Boolean)
         }
       ]

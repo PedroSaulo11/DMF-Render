@@ -41,7 +41,7 @@
                         <input type="password" id="loginPass" placeholder="Senha" class="styled-input" autocomplete="current-password">
                     </div>
                     <button id="btnLogin" class="btn btn-primary btn-full">Acessar Sistema</button>
-                    <p class="login-subtitle">Falha ao carregar a interface completa. Tente recarregar.</p>
+                    <p id="loginStatus" class="login-helper">Falha ao carregar a interface completa. Tente recarregar.</p>
                 </div>
             `;
         }

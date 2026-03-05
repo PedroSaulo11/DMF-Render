@@ -39,6 +39,20 @@ async function request(path, { method = 'GET', token = null, body = null } = {})
   return { status: response.status, json };
 }
 
+async function ensureSmokeUser() {
+  const username = `smoke_${Date.now()}`;
+  const email = `${username}@local.test`;
+  const password = 'Smoke@1234';
+  const reg = await request('/api/auth/register', {
+    method: 'POST',
+    body: { username, email, password, name: 'Smoke User' }
+  });
+  if (reg.status !== 201 || !reg.json?.user?.id) {
+    throw new Error(`Falha ao bootstrapar usuario de smoke: HTTP ${reg.status} ${JSON.stringify(reg.json)}`);
+  }
+  return Number(reg.json.user.id);
+}
+
 async function waitForHealth() {
   await wait(STARTUP_WAIT_MS);
   let lastError = null;
@@ -56,6 +70,8 @@ async function waitForHealth() {
 }
 
 async function main() {
+  const dbUrl = String(process.env.DATABASE_URL || '').trim();
+  const dbRetries = String(process.env.DB_CONNECT_RETRIES || (dbUrl ? '3' : '1')).trim();
   const child = spawn(process.execPath, ['server.js'], {
     stdio: ['ignore', 'pipe', 'pipe'],
     env: {
@@ -63,8 +79,8 @@ async function main() {
       PORT: String(PORT),
       NODE_ENV: 'development',
       SECRET_MANAGER_ENABLED: 'false',
-      DATABASE_URL: '',
-      DB_CONNECT_RETRIES: '1',
+      DATABASE_URL: dbUrl,
+      DB_CONNECT_RETRIES: dbRetries,
       JWT_SECRET: SECRET,
       SIGNATURE_SECRET: 'smoke-signature-secret',
       PERMISSIONS_ENFORCED: 'true'
@@ -82,9 +98,10 @@ async function main() {
       return;
     }
 
-    const adminToken = tokenFor({ id: 1001, username: 'admin-smoke', role: 'admin' });
-    const gestorToken = tokenFor({ id: 1002, username: 'gestor-smoke', role: 'gestor' });
-    const userToken = tokenFor({ id: 1003, username: 'user-smoke', role: 'user' });
+    const smokeUserId = await ensureSmokeUser();
+    const adminToken = tokenFor({ id: smokeUserId, username: 'admin-smoke', role: 'admin' });
+    const gestorToken = tokenFor({ id: smokeUserId, username: 'gestor-smoke', role: 'gestor' });
+    const userToken = tokenFor({ id: smokeUserId, username: 'user-smoke', role: 'user' });
 
     const paymentId = `smoke-${Date.now()}`;
     const create = await request('/api/flow-payments?company=DMF', {

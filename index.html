@@ -27,7 +27,7 @@
             <input type="password" id="loginPass" placeholder="Senha" class="styled-input" autocomplete="current-password">
         </div>
         <button id="btnLogin" class="btn btn-primary btn-full">Acessar Sistema</button>
-        <p class="login-subtitle">Acesso restrito a colaboradores autorizados.</p>
+        <p id="loginStatus" class="login-helper">Acesso restrito a colaboradores autorizados.</p>
     </div>
 </div>
 
@@ -84,6 +84,25 @@
 
         <section id="cobli" class="view hidden" data-fragment="cobli.fragment.html"></section>
     </main>
+</div>
+
+<div id="omniAssistantDock" class="omni-assistant hidden">
+    <button id="omniAssistantFab" class="omni-assistant-fab" type="button" aria-label="Abrir assistente">Assistente</button>
+    <div id="omniAssistantPanel" class="omni-assistant-panel hidden">
+        <div class="omni-assistant-header">
+            <strong>Assistente</strong>
+            <div class="omni-assistant-actions">
+                <button id="omniAssistantOpenFull" class="btn btn-ghost" type="button">Abrir completo</button>
+                <button id="omniAssistantClose" class="btn btn-ghost" type="button">Fechar</button>
+            </div>
+        </div>
+        <div id="omniAssistantSuggestions" class="omni-assistant-suggestions"></div>
+        <div id="omniAssistantMessages" class="omni-assistant-messages"></div>
+        <div class="omni-assistant-input">
+            <input id="omniAssistantInput" type="text" class="chat-input" placeholder="Digite um comando...">
+            <button id="omniAssistantSend" class="btn btn-primary" type="button">Enviar</button>
+        </div>
+    </div>
 </div>
 
 <div id="toastContainer" class="toast-container"></div>

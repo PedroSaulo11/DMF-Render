@@ -28,10 +28,28 @@
                         <button id="btnClearPaymentsFilter" class="btn btn-ghost">Limpar</button>
                         <div id="paymentsFilterCount" class="filter-count">Mostrando 0</div>
                     </div>
+                    <div id="paymentsBatchBar" class="payments-batch-bar">
+                        <button id="btnSelectPendingPayments" class="btn btn-ghost">Selecionar Pendentes</button>
+                        <button id="btnBatchSignPayments" class="btn btn-primary">Assinar Selecionados</button>
+                        <button id="btnClearPaymentSelection" class="btn btn-ghost">Limpar Seleção</button>
+                        <span id="paymentsSelectionCount" class="filter-count">Selecionados: 0</span>
+                    </div>
+                    <div id="assistantFlowContext" class="assistant-flow-context">
+                        <div class="assistant-flow-context-title">Copiloto do Fluxo</div>
+                        <div id="assistantFlowContextText" class="assistant-flow-context-text">Analisando fluxo atual...</div>
+                        <div class="assistant-flow-context-actions">
+                            <button id="assistantCtxFilterPending" class="btn btn-ghost" type="button">Filtrar Pendentes</button>
+                            <button id="assistantCtxSelectPending" class="btn btn-ghost" type="button">Selecionar Pendentes</button>
+                            <button id="assistantCtxSignSelected" class="btn btn-primary" type="button">Assinar Selecionados</button>
+                        </div>
+                    </div>
                     <div class="data-table-wrapper data-table-spaced">
                         <table id="paymentsTable">
                             <thead>
                                 <tr>
+                                    <th class="col-select">
+                                        <input type="checkbox" id="paymentsSelectAll" aria-label="Selecionar todos os pagamentos visíveis">
+                                    </th>
                                     <th>Fornecedor</th>
                                     <th>Data</th>
                                     <th>Descrição</th>
