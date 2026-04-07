@@ -44,6 +44,19 @@ Variaveis minimas de ambiente:
 
 O app usa `process.env.PORT`, entao nao precisa configurar porta manualmente.
 
+Se quiser provisionar app + banco no Render com menos cliques, use o arquivo
+`render.yaml` na raiz do repositorio. Ele define:
+
+- um `Web Service` Node
+- um `Render Postgres`
+- `DATABASE_URL` vinda do banco por `fromDatabase`
+- secrets gerados para `JWT_SECRET` e `SIGNATURE_SECRET`
+
+Arquivos uteis para deploy:
+
+- `render.yaml`
+- `.env.render.example`
+
 ## Checks uteis
 
 Validacoes locais:

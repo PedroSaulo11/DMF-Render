@@ -1,0 +1,111 @@
+services:
+  - type: web
+    runtime: node
+    name: dmf-render
+    region: oregon
+    plan: free
+    branch: main
+    buildCommand: npm install
+    startCommand: node server.js
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: dmf-render-db
+          property: connectionString
+      - key: PG_SSL
+        value: "false"
+      - key: LOG_TO_CONSOLE
+        value: "true"
+      - key: JWT_SECRET
+        generateValue: true
+      - key: SIGNATURE_SECRET
+        generateValue: true
+      - key: CORS_ORIGINS
+        sync: false
+      - key: EXTERNAL_API_TIMEOUT_MS
+        value: "10000"
+      - key: CONTA_AZUL_TIMEOUT_MS
+        value: "10000"
+      - key: COBLI_TIMEOUT_MS
+        value: "10000"
+      - key: DB_SCHEMA_STRICT
+        value: "false"
+      - key: DB_POOL_MAX
+        value: "10"
+      - key: DB_POOL_MIN
+        value: "0"
+      - key: DB_POOL_ACQUIRE_MS
+        value: "30000"
+      - key: DB_POOL_IDLE_MS
+        value: "10000"
+      - key: CACHE_TTL_SECONDS
+        value: "60"
+      - key: CACHE_TTL_PAYMENTS
+        value: "60"
+      - key: CACHE_TTL_COBLI_PAYMENTS
+        value: "60"
+      - key: CACHE_TTL_COBLI_LOCATIONS
+        value: "30"
+      - key: ENABLE_REDIS_CACHE
+        value: "false"
+      - key: ENABLE_DISTRIBUTED_RATE_LIMIT
+        value: "false"
+      - key: ENABLE_PUBSUB_SSE
+        value: "false"
+      - key: ENABLE_STRICT_API_ONLY_AUTH
+        value: "false"
+      - key: ENABLE_HTTPONLY_SESSION
+        value: "false"
+      - key: PERMISSIONS_ENFORCED
+        value: "true"
+      - key: ENFORCE_COMPANY_ACCESS
+        value: "true"
+      - key: ALLOW_ALL_COMPANIES_WHEN_UNSET
+        value: "false"
+      - key: DEFAULT_COMPANIES
+        value: "DMF,JFX,Real Energy"
+      - key: ACCESS_TOKEN_EXPIRES_IN
+        value: "48h"
+      - key: USER_REFRESH_EXPIRES_DAYS
+        value: "30"
+      - key: LOGIN_LOCK_WINDOW_MS
+        value: "900000"
+      - key: LOGIN_LOCK_MAX_ATTEMPTS
+        value: "6"
+      - key: LOGIN_LOCK_DURATION_MS
+        value: "900000"
+      - key: CONTA_AZUL_CLIENT_ID
+        sync: false
+      - key: CONTA_AZUL_CLIENT_SECRET
+        sync: false
+      - key: CONTA_AZUL_ACCESS_TOKEN
+        sync: false
+      - key: CONTA_AZUL_REFRESH_TOKEN
+        sync: false
+      - key: CONTA_AZUL_TOKEN_URL
+        value: https://api.contaazul.com/oauth2/token
+      - key: CONTA_AZUL_API_BASE_URL
+        value: https://api.contaazul.com
+      - key: CONTA_AZUL_PAYMENTS_PATH
+        value: /v2/payments
+      - key: COBLI_API_TOKEN
+        sync: false
+      - key: COBLI_WEBHOOK_SECRET
+        sync: false
+      - key: COBLI_API_BASE_URL
+        value: https://api.cobli.com.br/v2
+      - key: COBLI_AUTH_HEADER
+        value: Authorization
+      - key: COBLI_AUTH_SCHEME
+        value: Bearer
+      - key: COBLI_WEBHOOK_SIGNATURE_HEADER
+        value: X-Cobli-Signature
+databases:
+  - name: dmf-render-db
+    region: oregon
+    plan: free
+    databaseName: dmf_app
+    ipAllowList: []
