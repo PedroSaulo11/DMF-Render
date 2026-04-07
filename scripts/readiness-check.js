@@ -1,7 +1,6 @@
-/* Multiuser production readiness checks for current deployment strategy. */
+/* Readiness checks for the Render deployment flow. */
 const fs = require('fs');
 const path = require('path');
-const { spawnSync } = require('child_process');
 
 const root = process.cwd();
 let hasFailure = false;
@@ -27,142 +26,73 @@ function readFile(file) {
   }
 }
 
-function findYamlValue(yaml, key) {
-  const regex = new RegExp(`^\\s*${key}:\\s*\"([^\"]*)\"\\s*$`, 'm');
-  const match = yaml.match(regex);
-  return match ? String(match[1] || '').trim() : null;
-}
-
-function checkAppYamlStrategy() {
-  const appYaml = readFile('app.yaml');
-  if (!appYaml) {
-    fail('app.yaml nao encontrado.');
+function checkPackageJson() {
+  const raw = readFile('package.json');
+  if (!raw) {
+    fail('package.json nao encontrado.');
     return;
   }
 
-  const sensitiveDirectKeys = [
-    'JWT_SECRET',
-    'CONTA_AZUL_CLIENT_SECRET',
-    'CONTA_AZUL_ACCESS_TOKEN',
-    'CONTA_AZUL_REFRESH_TOKEN',
+  let pkg = null;
+  try {
+    pkg = JSON.parse(raw);
+  } catch (error) {
+    fail(`package.json invalido: ${error.message}`);
+    return;
+  }
+
+  const nodeVersion = String(pkg.engines?.node || '').trim();
+  if (!nodeVersion) {
+    fail('engines.node ausente em package.json.');
+  } else {
+    ok(`engines.node configurado: ${nodeVersion}`);
+  }
+}
+
+function checkEnvExample() {
+  const envExample = readFile('.env.example');
+  if (!envExample) {
+    fail('.env.example nao encontrado.');
+    return;
+  }
+
+  const requiredKeys = [
+    'NODE_ENV',
     'DATABASE_URL',
-    'SIGNATURE_SECRET',
-    'EVENT_WEBHOOK_SECRET'
+    'PG_SSL',
+    'JWT_SECRET',
+    'SIGNATURE_SECRET'
   ];
 
-  const exposed = [];
-  for (const key of sensitiveDirectKeys) {
-    const value = findYamlValue(appYaml, key);
-    if (value && value.length > 0) exposed.push(key);
-  }
-  if (exposed.length > 0) {
-    fail(`Segredos ainda hardcoded em app.yaml: ${exposed.join(', ')}`);
-  } else {
-    ok('Sem segredos hardcoded no app.yaml.');
-  }
-
-  const secretManagerEnabled = findYamlValue(appYaml, 'SECRET_MANAGER_ENABLED') === 'true';
-  if (!secretManagerEnabled) {
-    fail('SECRET_MANAGER_ENABLED precisa estar true no app.yaml para a estrategia atual.');
-  } else {
-    ok('Secret Manager habilitado no app.yaml.');
-  }
-
-  const requiredMapKeys = [
-    'GCP_PROJECT_ID',
-    'SECRET_JWT_SECRET',
-    'SECRET_CONTA_AZUL_CLIENT_SECRET',
-    'SECRET_CONTA_AZUL_ACCESS_TOKEN',
-    'SECRET_CONTA_AZUL_REFRESH_TOKEN',
-    'SECRET_DATABASE_URL',
-    'SECRET_SIGNATURE_SECRET',
-    'SECRET_EVENT_WEBHOOK_SECRET'
-  ];
-  const missing = requiredMapKeys.filter((k) => !findYamlValue(appYaml, k));
-  if (missing.length) {
-    fail(`Mapeamento de secrets ausente no app.yaml: ${missing.join(', ')}`);
-  } else {
-    ok('Mapeamento de nomes de secrets presente no app.yaml.');
-  }
-
-  const distFlags = [
-    findYamlValue(appYaml, 'ENABLE_REDIS_CACHE') === 'true',
-    findYamlValue(appYaml, 'ENABLE_DISTRIBUTED_RATE_LIMIT') === 'true',
-    findYamlValue(appYaml, 'ENABLE_PUBSUB_SSE') === 'true'
-  ];
-  const redisSecretMapped = !!findYamlValue(appYaml, 'SECRET_REDIS_URL');
-  if (distFlags.some(Boolean) && !redisSecretMapped) {
-    warn('Flags distribuidas estao ativas, mas SECRET_REDIS_URL nao esta mapeado no app.yaml.');
-  }
-
-  const runtimeMatch = appYaml.match(/^\s*runtime:\s*([^\s]+)\s*$/m);
-  const runtime = runtimeMatch ? String(runtimeMatch[1] || '').trim() : '';
-  if (!runtime) {
-    warn('runtime nao encontrado no app.yaml.');
-  } else if (runtime.toLowerCase() === 'nodejs20') {
-    fail('runtime nodejs20 em fim de suporte. Atualize para nodejs22 ou superior.');
-  } else {
-    ok(`Runtime atual no app.yaml: ${runtime}`);
-  }
-}
-
-function checkSecretsWithGcloud() {
-  if (process.env.VERIFY_GCLOUD_SECRETS !== 'true') {
-    warn('Validacao remota de secrets desativada (defina VERIFY_GCLOUD_SECRETS=true para habilitar).');
-    return;
-  }
-
-  const appYaml = readFile('app.yaml');
-  if (!appYaml) {
-    fail('app.yaml nao encontrado para validar secrets remotos.');
-    return;
-  }
-
-  const projectId = findYamlValue(appYaml, 'GCP_PROJECT_ID');
-  if (!projectId) {
-    fail('GCP_PROJECT_ID ausente no app.yaml.');
-    return;
-  }
-
-  const mappedNames = [
-    findYamlValue(appYaml, 'SECRET_JWT_SECRET'),
-    findYamlValue(appYaml, 'SECRET_CONTA_AZUL_CLIENT_SECRET'),
-    findYamlValue(appYaml, 'SECRET_CONTA_AZUL_ACCESS_TOKEN'),
-    findYamlValue(appYaml, 'SECRET_CONTA_AZUL_REFRESH_TOKEN'),
-    findYamlValue(appYaml, 'SECRET_DATABASE_URL'),
-    findYamlValue(appYaml, 'SECRET_SIGNATURE_SECRET'),
-    findYamlValue(appYaml, 'SECRET_EVENT_WEBHOOK_SECRET')
-  ].filter(Boolean);
-
-  function gcloudDescribe(secretName) {
-    if (process.platform === 'win32') {
-      const cmd = `gcloud secrets describe ${secretName} --project=${projectId}`;
-      return spawnSync('cmd.exe', ['/d', '/s', '/c', cmd], {
-        cwd: root,
-        encoding: 'utf8'
-      });
-    }
-    return spawnSync('gcloud', ['secrets', 'describe', secretName, `--project=${projectId}`], {
-      cwd: root,
-      encoding: 'utf8'
-    });
-  }
-
-  for (const secretName of mappedNames) {
-    const result = gcloudDescribe(secretName);
-    if (result.status !== 0) {
-      fail(`Secret nao encontrado ou sem acesso: ${secretName}`);
+  for (const key of requiredKeys) {
+    if (!new RegExp(`^${key}=`, 'm').test(envExample)) {
+      fail(`.env.example sem chave obrigatoria: ${key}.`);
     } else {
-      ok(`Secret encontrado: ${secretName}`);
+      ok(`${key} presente em .env.example.`);
     }
   }
 }
 
-checkAppYamlStrategy();
-checkSecretsWithGcloud();
+function checkActiveFiles() {
+  const requiredFiles = ['server.js', 'db.js', 'package.json', '.env.example'];
+
+  for (const file of requiredFiles) {
+    if (fs.existsSync(path.join(root, file))) {
+      ok(`Arquivo ativo presente: ${file}`);
+    } else {
+      fail(`Arquivo ativo ausente: ${file}`);
+    }
+  }
+}
+
+checkPackageJson();
+checkEnvExample();
+checkActiveFiles();
 
 if (hasFailure) {
   process.exit(1);
 }
 
 ok('Readiness check finalizado.');
+
+

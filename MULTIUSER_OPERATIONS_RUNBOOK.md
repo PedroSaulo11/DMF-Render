@@ -4,7 +4,7 @@
 Padronizar resposta a incidentes de produção para o cenário multiusuário sem interromper funcionalidades já estáveis.
 
 ## Sinais de incidente
-- Aumento de `5xx` no App Engine.
+- Aumento de `5xx` no ambiente de producao.
 - Falha em `Post-Deploy Multiuser Validation`.
 - `redis_ready=false` ou `sse_pubsub.subscribed=false` em `/api/health`.
 - `load:prod:multiuser` com `create:403` ou `fail>0`.
@@ -29,7 +29,7 @@ BASE_URL=... ACCESS_TOKEN=... TEST_COMPANY=... TEST_COMPANY_FORBIDDEN=... npm ru
 
 ## Passo 2 - Classificação e ação imediata
 - `health=500` ou boot error:
-  - revisar deploy/secret/env e logs do App Engine.
+  - revisar deploy, variaveis de ambiente e logs do provedor atual.
 - `redis_ready=false`:
   - validar `REDIS_URL` secret, conectividade e flags distribuídas.
 - `create:403` no load:

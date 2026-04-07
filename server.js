@@ -1,4 +1,4 @@
-﻿// In production (App Engine), config comes from env vars / Secret Manager.
+// In production, config comes from host-provided environment variables.
 // Loading `.env` in production can accidentally override secrets (e.g. DATABASE_URL).
 if (process.env.NODE_ENV !== 'production') {
   require('dotenv').config();
@@ -103,7 +103,7 @@ function isStrongPassword(value) {
 }
 
 function passwordPolicyMessage() {
-  return 'Senha deve ter no mÃ­nimo 8 caracteres, com maiÃºscula, minÃºscula, nÃºmero e sÃ­mbolo.';
+  return 'Senha deve ter no mínimo 8 caracteres, com maiúscula, minúscula, número e símbolo.';
 }
 
 function envFlag(name, fallback = false) {
@@ -449,7 +449,7 @@ async function enforceCompanyAccess(req, res, next) {
     if (ALLOW_ALL_COMPANIES_WHEN_UNSET) {
       return next();
     }
-    await recordAuditEvent(req, 'COMPANY_ACCESS_DENIED', 'Nenhuma empresa liberada para o usuÃ¡rio.', {
+    await recordAuditEvent(req, 'COMPANY_ACCESS_DENIED', 'Nenhuma empresa liberada para o usuário.', {
       userId: req.user?.id || null
     });
     return res.status(403).json({ error: 'Company access not configured' });
@@ -524,12 +524,7 @@ const contaAzulClient = axios.create({ timeout: CONTA_AZUL_TIMEOUT_MS });
 const cobliClient = axios.create({ timeout: COBLI_TIMEOUT_MS });
 
 // Security: Configure Winston logger
-function isGcpRuntime() {
-  // Covers App Engine / Cloud Run style env vars.
-  return !!(process.env.GAE_ENV || process.env.K_SERVICE || process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT);
-}
-
-const enableConsoleLogs = process.env.LOG_TO_CONSOLE === 'true' || process.env.NODE_ENV !== 'production' || isGcpRuntime();
+const enableConsoleLogs = process.env.LOG_TO_CONSOLE === 'true' || process.env.NODE_ENV !== 'production';
 const loggerTransports = [];
 
 if (enableConsoleLogs) {
@@ -537,8 +532,7 @@ if (enableConsoleLogs) {
     format: winston.format.simple(),
   }));
 } else {
-  // File transport is unsafe on App Engine because the filesystem is not guaranteed writable.
-  // Keep it for local/server deployments where the working directory is writable.
+  // Keep file logs only for hosts where the working directory is writable.
   const logDir = path.join(__dirname, 'logs');
   fs.mkdirSync(logDir, { recursive: true });
   loggerTransports.push(new winston.transports.File({ filename: path.join(logDir, 'error.log'), level: 'error' }));
@@ -800,8 +794,8 @@ const PUBLIC_FILES = new Set([
 ]);
 
 // Boot gating:
-// Keep the process alive (so App Engine doesn't show a generic 503) and return explicit 503s for API/tasks
-// until required secrets/config are loaded. Static UI can still load to surface diagnostics via /api/health.
+// Keep the process alive and return explicit 503s for API/tasks until required
+// secrets/config are loaded. Static UI can still load to surface diagnostics via /api/health.
 const bootState = {
   ready: false,
   startedAt: new Date().toISOString(),
@@ -920,70 +914,6 @@ function describeDatabaseUrl(value) {
     uses_cloudsql_socket: usesCloudSqlSocket,
     host_hint: hostHint
   };
-}
-
-async function loadSecretsFromSecretManager() {
-  const enabled = process.env.SECRET_MANAGER_ENABLED === 'true';
-  if (!enabled) return;
-
-  const projectId = process.env.GCP_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT;
-  if (!projectId) {
-    throw new Error('SECRET_MANAGER_ENABLED=true but project id not found (GCP_PROJECT_ID/GOOGLE_CLOUD_PROJECT).');
-  }
-
-  const { SecretManagerServiceClient } = require('@google-cloud/secret-manager');
-  const client = new SecretManagerServiceClient();
-  const mappings = [
-    { envVar: 'JWT_SECRET', secretName: process.env.SECRET_JWT_SECRET || 'JWT_SECRET', required: true },
-    // Optional: system must boot even if Conta Azul integration is not configured.
-    { envVar: 'CONTA_AZUL_CLIENT_SECRET', secretName: process.env.SECRET_CONTA_AZUL_CLIENT_SECRET || 'CONTA_AZUL_CLIENT_SECRET', required: false },
-    { envVar: 'CONTA_AZUL_ACCESS_TOKEN', secretName: process.env.SECRET_CONTA_AZUL_ACCESS_TOKEN || 'CONTA_AZUL_ACCESS_TOKEN', required: false },
-    { envVar: 'CONTA_AZUL_REFRESH_TOKEN', secretName: process.env.SECRET_CONTA_AZUL_REFRESH_TOKEN || 'CONTA_AZUL_REFRESH_TOKEN', required: false },
-    { envVar: 'DATABASE_URL', secretName: process.env.SECRET_DATABASE_URL || 'DATABASE_URL', required: true },
-    { envVar: 'SIGNATURE_SECRET', secretName: process.env.SECRET_SIGNATURE_SECRET || 'SIGNATURE_SECRET', required: true },
-    { envVar: 'EVENT_WEBHOOK_SECRET', secretName: process.env.SECRET_EVENT_WEBHOOK_SECRET || 'EVENT_WEBHOOK_SECRET', required: false },
-    { envVar: 'COBLI_API_TOKEN', secretName: process.env.SECRET_COBLI_API_TOKEN || 'COBLI_API_TOKEN', required: false },
-    { envVar: 'REDIS_URL', secretName: process.env.SECRET_REDIS_URL || 'REDIS_URL', required: false }
-  ];
-
-  const missing = [];
-  for (const item of mappings) {
-    if (process.env[item.envVar]) continue;
-    try {
-      const name = `projects/${projectId}/secrets/${item.secretName}/versions/latest`;
-      const [version] = await client.accessSecretVersion({ name });
-      const payload = version?.payload?.data ? version.payload.data.toString('utf8').trim() : '';
-      if (payload) {
-        process.env[item.envVar] = payload;
-      } else if (item.required) {
-        missing.push(item.envVar);
-      }
-    } catch (error) {
-      if (item.required) {
-        logger.error('Required secret not loaded from Secret Manager', {
-          envVar: item.envVar,
-          secretName: item.secretName,
-          error: error.message
-        });
-        missing.push(item.envVar);
-      } else {
-        logger.warn('Optional secret not loaded from Secret Manager', {
-          envVar: item.envVar,
-          secretName: item.secretName,
-          error: error.message
-        });
-      }
-    }
-  }
-
-  if (missing.length) {
-    throw new Error(`Required secrets missing: ${missing.join(', ')}`);
-  }
-
-  logger.info('Secrets loaded from Secret Manager', {
-    projectId,
-    loaded: mappings.map(m => m.envVar).filter(envVar => !!process.env[envVar]).length
-  });
 }
 
 applyRuntimeConfigFromEnv();
@@ -1755,7 +1685,7 @@ app.post('/api/auth/login', [
       return res.status(401).json({
         error: 'Invalid credentials',
         reason: 'USER_NOT_FOUND',
-        message: 'UsuÃ¡rio incorreto.'
+        message: 'Usuário incorreto.'
       });
     }
 
@@ -2224,7 +2154,7 @@ app.post(
       if (existing && Number(existing.version || 0) !== expected) {
         return respondConflict(req, res, {
           code: 'FLOW_VERSION_CONFLICT',
-          message: `Conflito de versÃ£o para o pagamento ${payment.id}.`,
+          message: `Conflito de versão para o pagamento ${payment.id}.`,
           payload: {
             current: existing,
             expectedVersion: expected,
@@ -2246,7 +2176,7 @@ app.post(
           const current = await getFlowPaymentById(payment.id, company);
           return respondConflict(req, res, {
             code: 'FLOW_VERSION_CONFLICT',
-            message: `Conflito de versÃ£o para o pagamento ${payment.id}.`,
+            message: `Conflito de versão para o pagamento ${payment.id}.`,
             payload: {
               current: current || null,
               expectedVersion: expected,
@@ -2991,7 +2921,7 @@ app.get('/api/auth/user-status', authenticateToken, async (req, res) => {
   });
 });
 
-// Cron: automated backup (App Engine)
+// Cron: automated backup
 app.post('/tasks/backup', async (req, res) => {
   const isCron = req.get('X-Appengine-Cron') === 'true';
   const secret = req.get('X-Cron-Secret');
@@ -3046,8 +2976,6 @@ app.get('/api/health', async (req, res) => {
     permissions_enforced: PERMISSIONS_ENFORCED,
     company_access_enforced: ENFORCE_COMPANY_ACCESS,
     feature_flags: FEATURE_FLAGS,
-    secret_manager_enabled: process.env.SECRET_MANAGER_ENABLED === 'true',
-    secret_manager_project: process.env.GCP_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT || null,
     roles: roleCount,
     runtime: {
       sse_subscribers: flowSubscribers.size,
@@ -3170,7 +3098,7 @@ app.put(
       const userId = Number(req.params.id);
       const companies = (req.body.companies || []).map(c => normalizeCompany(c)).filter(Boolean);
       await replaceUserCompanies(userId, Array.from(new Set(companies)));
-      await recordAuditEvent(req, 'USER_COMPANIES_UPDATED', `Empresas atualizadas para usuÃ¡rio ${userId}.`, {
+      await recordAuditEvent(req, 'USER_COMPANIES_UPDATED', `Empresas atualizadas para usuário ${userId}.`, {
         userId,
         companies
       });
@@ -3219,7 +3147,7 @@ app.put(
     const centerKey = centerLabel.toLowerCase();
     const company = String(req.body.company || '').trim();
     const saved = await upsertCenterCompany(centerKey, centerLabel, company);
-    await recordAuditEvent(req, 'CENTER_COMPANY_UPDATE', `Centro ${centerLabel} â†’ ${company}`, {
+    await recordAuditEvent(req, 'CENTER_COMPANY_UPDATE', `Centro ${centerLabel} → ${company}`, {
       center: centerLabel,
       company
     });
@@ -3334,7 +3262,7 @@ app.post('/api/auth/revoke/:id', authenticateToken, authorizeRole('admin'), auth
       await revokeUserRefreshSessionsByUser(userId);
     }
     emitEventWebhook('user_sessions_revoked', { userId, admin: req.user?.username || null });
-    await recordAuditEvent(req, 'SESSIONS_REVOKED', `SessÃµes revogadas para usuÃ¡rio ${userId}.`, {
+    await recordAuditEvent(req, 'SESSIONS_REVOKED', `Sessões revogadas para usuário ${userId}.`, {
       userId
     });
     res.json({ success: true });
@@ -3366,7 +3294,7 @@ app.post('/api/auth/revoke-self', authenticateToken, authorizeRole('user'), dist
       await revokeUserRefreshSessionsByUser(req.user?.id);
     }
     clearAuthCookies(res);
-    await recordAuditEvent(req, 'SESSIONS_REVOKED_SELF', 'SessÃµes revogadas pelo prÃ³prio usuÃ¡rio.', {
+    await recordAuditEvent(req, 'SESSIONS_REVOKED_SELF', 'Sessões revogadas pelo próprio usuário.', {
       userId: req.user?.id || null
     });
     res.json({ success: true });
@@ -3468,13 +3396,13 @@ app.put('/api/users/:id', authenticateToken, authorizeRole('admin'), authorizePe
       });
     }
     if (req.body.password) {
-      await recordAuditEvent(req, 'PASSWORD_RESET_ADMIN', `Senha redefinida para o usuÃ¡rio ${user.username}.`, {
+      await recordAuditEvent(req, 'PASSWORD_RESET_ADMIN', `Senha redefinida para o usuário ${user.username}.`, {
         targetUserId: user.id,
         targetUsername: user.username
       });
     }
 
-    await recordAuditEvent(req, 'USER_UPDATED', `UsuÃ¡rio ${user.username} atualizado.`, {
+    await recordAuditEvent(req, 'USER_UPDATED', `Usuário ${user.username} atualizado.`, {
       targetUserId: user.id,
       targetUsername: user.username
     });
@@ -3528,7 +3456,7 @@ app.delete('/api/users/:id', authenticateToken, authorizeRole('admin'), authoriz
       admin: req.user?.username || null
     });
 
-    await recordAuditEvent(req, 'USER_DELETED', `UsuÃ¡rio ${user.username} removido.`, {
+    await recordAuditEvent(req, 'USER_DELETED', `Usuário ${user.username} removido.`, {
       targetUserId: userId,
       targetUsername: user.username
     });
@@ -3725,7 +3653,6 @@ function startHttpServer() {
 async function startServer() {
   startHttpServer();
   try {
-    await loadSecretsFromSecretManager();
     applyRuntimeConfigFromEnv();
     logger.info('Feature flags loaded', FEATURE_FLAGS);
 
@@ -3757,4 +3684,5 @@ startServer().catch(error => {
   bootState.fatalError = error && error.message ? error.message : String(error);
   logger.error('Unexpected startup failure', { error: bootState.fatalError });
 });
+
 

@@ -1,4 +1,4 @@
-# TODO: Deploy DMF Application to Google Cloud
+# TODO: Deploy DMF Application to Render
 
 ## Database Migration
 - [x] Install PostgreSQL client library (pg)
@@ -6,14 +6,13 @@
 - [x] Create database schema for webhook_data table in PostgreSQL
 - [ ] Update .env with PostgreSQL connection details
 
-## Google Cloud Configuration
-- [x] Create app.yaml for App Engine deployment
+## Render Configuration
 - [ ] Configure environment variables for production
-- [ ] Set up Google Cloud SQL connection
+- [ ] Confirm PostgreSQL connection for Render
 
 ## Deployment
 - [ ] Test database connection locally
-- [ ] Deploy to Google Cloud App Engine
+- [ ] Deploy to Render
 - [ ] Verify webhook functionality with PostgreSQL
 - [ ] Test Conta Azul API integration
 - [x] Update frontend to use production URLs

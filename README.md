@@ -1,222 +1,95 @@
-# Backend do Sistema DMF
+# SISTEMA-ATUAL-DMF
 
-Repositório do backend (API + integrações Conta Azul/Cobli) hospedado no Google Cloud App Engine.
+Backend e interface web do sistema DMF, pronto para deploy em Render com PostgreSQL externo ou Render Postgres.
 
-URL pública atual:
-- https://project-b2fcff48-a0ca-4867-995.rj.r.appspot.com
+## Rodar localmente
 
-## 1) Git e compartilhamento do código
-
-O projeto já está versionado e publicado no GitHub.
-
-Clonar:
-```bash
-git clone https://github.com/PedroSaulo11/SISTEMA-ATUAL-DMF.git
-cd SISTEMA-ATUAL-DMF
-```
-
-Fluxo básico:
-```bash
-# atualizar
-git pull
-
-# adicionar alterações
-git add .
-
-# commitar
-git commit -m "Minha alteração"
-
-# enviar
-git push
-```
-
-## 2) Rodar localmente
-
-Instalar dependências:
+Instalar dependencias:
 ```bash
 npm install
 ```
 
-Rodar API:
+Subir a aplicacao:
 ```bash
 npm start
 ```
 
-Rodar em modo desenvolvimento:
+Modo desenvolvimento:
 ```bash
 npm run dev
 ```
 
-Webhook (se necessário):
+Webhook, se necessario:
 ```bash
 npm run start:webhook
 ```
 
-## 3) VS Code Live Share (colaboração em tempo real)
+## Deploy no Render
 
-1. Instale a extensão **Live Share** no VS Code.
-2. Clique no ícone do Live Share e em **Start Collaboration Session**.
-3. Compartilhe o link gerado com os colaboradores.
-4. Os colaboradores precisam ter a extensão instalada para entrar.
+Configurar um `Web Service` com:
 
-## 4) Backend no Google Cloud
+- Runtime: `Node`
+- Branch: `main`
+- Build Command: `npm install`
+- Start Command: `node server.js`
+- Instance Type: conforme o plano escolhido
 
-O backend está publicado no App Engine e pode ser acessado pela URL pública:
-- https://project-b2fcff48-a0ca-4867-995.rj.r.appspot.com
+Variaveis minimas de ambiente:
 
-Se quiser usar domínio próprio, configure no App Engine (Custom Domains).
+- `NODE_ENV=production`
+- `DATABASE_URL=...`
+- `PG_SSL=true|false` conforme o banco
+- `JWT_SECRET=...`
+- `SIGNATURE_SECRET=...`
 
-## 5) Deploy para o Google Cloud
+O app usa `process.env.PORT`, entao nao precisa configurar porta manualmente.
 
-Pré-requisitos:
-- Google Cloud SDK instalado e autenticado
-- Projeto selecionado
+## Checks uteis
 
-Deploy:
-```bash
-gcloud app deploy
-```
-
-## 6) Observações de segurança
-
-- **Não versionar** o arquivo `.env` com segredos.
-- No App Engine deste projeto, use `app.yaml` apenas para variáveis não sensíveis e mapeamento de nomes de segredos.
-- Os segredos reais devem vir do Secret Manager no startup do backend (`SECRET_MANAGER_ENABLED=true`).
-
-## 7) Check de prontidão multiusuário
-
-Rodar validações locais:
-```bash
-npm run check:phase3
-```
-
-Baseline de não regressão (Etapa 1):
+Validacoes locais:
 ```bash
 npm run check:baseline
 ```
 
-Check de readiness (incluído no `check:phase3`):
+Checklist mais completo:
 ```bash
-npm run check:readiness
+npm run check:phase3
 ```
 
-Para validar também existência dos segredos no GCP:
+Checks de producao:
 ```bash
-VERIFY_GCLOUD_SECRETS=true npm run check:readiness
+BASE_URL=https://seu-app.onrender.com npm run smoke:prod
+BASE_URL=https://seu-app.onrender.com npm run check:audit-fallback:prod
+BASE_URL=https://seu-app.onrender.com ACCESS_TOKEN=... npm run check:ops:metrics:prod
 ```
 
-## 8) Go-live multiusuário (automação completa)
-
-Checklist automatizado (local + produção):
+Go-live automatizado:
 ```bash
 npm run go-live:check
 ```
 
-Comportamento:
-- Sempre roda `check:phase3`.
-- Se `BASE_URL` estiver definido, roda `smoke:prod` e `check:audit-fallback:prod`.
-- Se `BASE_URL` e `ACCESS_TOKEN` estiverem definidos, roda carga concorrente (`load:prod:multiuser`).
+## Banco e autenticacao
 
-Variáveis úteis:
-- `BASE_URL=https://<app>.rj.r.appspot.com`
-- `ACCESS_TOKEN=<jwt_admin_valido>`
-- `LOGIN_LOCK_WINDOW_MS=900000`
-- `LOGIN_LOCK_MAX_ATTEMPTS=6`
-- `LOGIN_LOCK_DURATION_MS=900000`
-- `DB_POOL_MAX=20`
-- `DB_POOL_MIN=2`
-- `TEST_COMPANY=Real Energy`
-- `TEST_COMPANY_FORBIDDEN=DMF` (empresa que o usuário de teste não deve acessar)
-- `LOAD_WORKERS=8`
-- `LOAD_ROUNDS=20`
-- `LOAD_PAUSE_MS=100`
-- `LOAD_MAX_P95_MS=2000` (opcional, 0 desativa)
-- `LOAD_MAX_REQUEST_MS=5000` (opcional, 0 desativa)
-- `STRICT_SESSION_CHECK=true` (falha se contrato de sessão estiver inconsistente)
-- `STRICT_ACCESS_CHECK=true` (falha se RBAC/tenant estiver inconsistente)
-- `STRICT_LOAD_CHECK=true` (falha se carga concorrente falhar)
+- O sistema usa a tabela `app_users` para login.
+- O login aceita `username` ou `email`.
+- Senhas sao comparadas com `bcrypt`.
+- O bootstrap do schema e das roles padrao acontece no startup via Sequelize.
 
-Checks adicionais de produção:
-```bash
-BASE_URL=... ACCESS_TOKEN=... TEST_COMPANY=... npm run check:multiuser:access:prod
-BASE_URL=... TEST_USERNAME=... TEST_PASSWORD=... npm run check:session:prod
-BASE_URL=... ACCESS_TOKEN=... npm run check:ops:metrics:prod
-```
+## Operacao
 
-## 14) Métricas operacionais (admin)
+Health check:
+- `GET /api/health`
 
-Endpoint:
+Metricas operacionais:
 - `GET /api/ops/metrics` (requer `admin_access`)
 
-Inclui:
-- volume de requisições e status HTTP
-- falhas de autenticação/login
-- lockouts de login
-- uso de memória/CPU
-- sessões ativas e saúde de runtime (`db_ready`, `redis_ready`)
-
-## 9) Teste de carga concorrente
-
-```bash
-BASE_URL=... ACCESS_TOKEN=... npm run load:prod:multiuser
-```
-
-Valida em loop:
-- criação de pagamento
-- assinatura concorrente (esperado `200/409`)
-- limpeza do item de teste
-- latência p50/p95/max
-
-## 10) Permissões de auditoria no banco (correção definitiva)
-
-Aplicar grants com usuário admin do PostgreSQL:
+Permissoes de auditoria no banco:
 ```bash
 DB_ADMIN_URL=postgres://... DB_APP_ROLE=dmf_app npm run db:grant:audit
 ```
 
-Arquivo SQL de referência:
-- `db/migration_2026_02_24_audit_sequence_grants.sql`
+## Seguranca
 
-## 11) Segredos e acessos no Secret Manager
-
-Setup de segredos e IAM:
-```powershell
-.\scripts\secret-manager-setup.ps1 -ProjectId "project-b2fcff48-a0ca-4867-995"
-```
-
-Para também publicar versões com valores vindos do ambiente local:
-```powershell
-.\scripts\secret-manager-setup.ps1 -ProjectId "project-b2fcff48-a0ca-4867-995" -PopulateFromEnv
-```
-
-## 12) Monitoramento e alertas (Cloud Monitoring)
-
-Provisionar log-metrics + alert policies:
-```powershell
-.\scripts\setup-monitoring-alerts.ps1 -ProjectId "project-b2fcff48-a0ca-4867-995" -ServiceName "default"
-```
-
-Opcional: adicionar canal de notificação:
-```powershell
-.\scripts\setup-monitoring-alerts.ps1 -ProjectId "project-b2fcff48-a0ca-4867-995" -ServiceName "default" -NotificationChannel "projects/<id>/notificationChannels/<channel_id>"
-```
-
-## 13) Rollout por feature flags (Etapa 2)
-
-As flags abaixo existem para habilitar blocos de multiusuário de forma gradual, sem remover o fluxo atual:
-- `ENABLE_REDIS_CACHE`
-- `ENABLE_DISTRIBUTED_RATE_LIMIT`
-- `ENABLE_PUBSUB_SSE`
-- `ENABLE_STRICT_API_ONLY_AUTH`
-- `ENABLE_HTTPONLY_SESSION`
-
-Quando `ENABLE_HTTPONLY_SESSION=true`:
-- Login também emite cookies `HttpOnly` (`ACCESS_COOKIE_NAME` e `REFRESH_COOKIE_NAME`).
-- Refresh de sessão de usuário passa a usar `POST /api/auth/user-refresh`.
-- Logout de sessão via `POST /api/auth/logout`.
-
-Padrão seguro:
-- Todas em `false` no `app.yaml`.
-- Ativar uma por vez em ambiente de homologação.
-- Validar `GET /api/health` em `feature_flags`.
-- Executar smoke após cada ativação.
+- Nao versione `.env` nem `.env.render`.
+- Use segredos reais apenas no ambiente do Render.
+- Revise `CORS_ORIGINS`, `PG_SSL` e `DATABASE_URL` antes do deploy.

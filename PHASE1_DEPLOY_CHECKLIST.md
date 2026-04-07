@@ -15,7 +15,7 @@
   - `node --check bootstrap.js`
 - Rodar baseline de nao regressao:
   - `npm run check:baseline`
-- Confirmar variaveis de ambiente no GCloud:
+- Confirmar variaveis de ambiente no provedor de hospedagem:
   - `NODE_ENV=production`
   - `JWT_SECRET` definido
   - `CORS_ORIGINS` com dominio correto
@@ -27,7 +27,7 @@
     - `ENABLE_HTTPONLY_SESSION=false`
 
 ## Deploy
-- Publicar nova versao no App Engine.
+- Publicar nova versao no backend configurado.
 - Aguardar health:
   - `GET /api/health` retorna `200`.
   - `boot.ready=true`.
@@ -48,7 +48,7 @@
   - arquivamento de fluxo.
 
 ## Se algo falhar (rollback)
-- Promover versao anterior no App Engine.
+- Restaurar a versao anterior no provedor atual.
 - Reverter feature flags alteradas para `false`.
 - Limpar cache do navegador (`Ctrl+Shift+R`) nos clientes.
 - Revalidar `GET /api/health` e login.

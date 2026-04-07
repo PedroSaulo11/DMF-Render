@@ -25,11 +25,10 @@
     "check:session:prod": "node scripts/check-session-hardening-prod.js",
     "load:prod:multiuser": "node scripts/load-prod-multiuser.js",
     "go-live:check": "node scripts/go-live-check.js",
-    "check:baseline": "npm run check:syntax && npm run check:readiness && npm run smoke:health",
-    "check:phase3": "npm run check:syntax && npm run check:security && npm run check:readiness && npm run smoke:health && npm run check:audit-fallback:prod:optional"
+    "check:baseline": "npm run check:syntax && npm run check:security && npm run check:readiness && npm run smoke:health",
+    "check:phase3": "npm run check:baseline && npm run check:audit-fallback:prod:optional"
   },
   "dependencies": {
-    "@google-cloud/secret-manager": "^6.1.1",
     "animate.css": "^4.1.1",
     "axios": "^1.6.0",
     "bcryptjs": "^3.0.3",
