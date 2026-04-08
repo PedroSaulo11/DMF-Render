@@ -56,9 +56,17 @@ services:
       - key: ENABLE_PUBSUB_SSE
         value: "false"
       - key: ENABLE_STRICT_API_ONLY_AUTH
-        value: "false"
+        value: "true"
       - key: ENABLE_HTTPONLY_SESSION
         value: "false"
+      - key: BOOTSTRAP_ADMIN_USERNAME
+        sync: false
+      - key: BOOTSTRAP_ADMIN_EMAIL
+        sync: false
+      - key: BOOTSTRAP_ADMIN_PASSWORD
+        sync: false
+      - key: BOOTSTRAP_ADMIN_NAME
+        sync: false
       - key: PERMISSIONS_ENFORCED
         value: "true"
       - key: ENFORCE_COMPANY_ACCESS

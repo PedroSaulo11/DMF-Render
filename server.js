@@ -866,6 +866,88 @@ let accessToken = null;
 let refreshToken = null;
 let tokenExpiry = null; // Will be set based on JWT expiry
 const users = []; // In-memory fallback for transition
+
+function syncBootstrapUserToMemory(user) {
+  if (!inMemoryUserFallbackEnabled() || !user) return;
+  const userId = user.id == null ? null : String(user.id);
+  const index = users.findIndex(candidate =>
+    (userId && String(candidate.id || '') === userId) ||
+    String(candidate.username || '').toLowerCase() === String(user.username || '').toLowerCase() ||
+    String(candidate.email || '').toLowerCase() === String(user.email || '').toLowerCase()
+  );
+  const payload = {
+    id: user.id,
+    username: user.username,
+    email: user.email,
+    password_hash: user.password_hash,
+    role: user.role,
+    name: user.name || null,
+    created_at: user.created_at || new Date().toISOString(),
+    last_login: user.last_login || null
+  };
+  if (index >= 0) {
+    users[index] = payload;
+  } else {
+    users.push(payload);
+  }
+}
+
+async function ensureBootstrapAdmin() {
+  const username = String(process.env.BOOTSTRAP_ADMIN_USERNAME || '').trim();
+  const email = String(process.env.BOOTSTRAP_ADMIN_EMAIL || '').trim().toLowerCase();
+  const password = String(process.env.BOOTSTRAP_ADMIN_PASSWORD || '');
+  const name = String(process.env.BOOTSTRAP_ADMIN_NAME || 'Administrador').trim() || null;
+
+  if (!username && !email && !password) return;
+  if (!username || !email || !password) {
+    logger.warn('BOOTSTRAP_ADMIN skipped: username, email and password are required together');
+    return;
+  }
+  if (!isStrongPassword(password)) {
+    logger.warn('BOOTSTRAP_ADMIN skipped: password does not satisfy the configured policy');
+    return;
+  }
+
+  let existingUser = await getUserByUsernameOrEmail(email);
+  if (!existingUser) {
+    existingUser = await getUserByUsernameOrEmail(username);
+  }
+
+  if (existingUser) {
+    const conflict = await findUserByUsernameOrEmailExcludingId(username, email, existingUser.id);
+    if (conflict) {
+      logger.error('BOOTSTRAP_ADMIN conflict detected', {
+        username,
+        email,
+        conflicting_user_id: conflict.id
+      });
+      return;
+    }
+
+    const passwordHash = await bcrypt.hash(password, 12);
+    const updatedUser = await updateUserById(existingUser.id, {
+      username,
+      email,
+      password_hash: passwordHash,
+      role: 'admin',
+      name
+    });
+    syncBootstrapUserToMemory(updatedUser);
+    logger.info('Bootstrap admin updated successfully', { username, email });
+    return;
+  }
+
+  const passwordHash = await bcrypt.hash(password, 12);
+  const createdUser = await createUser({
+    username,
+    email,
+    passwordHash,
+    role: 'admin',
+    name
+  });
+  syncBootstrapUserToMemory(createdUser);
+  logger.info('Bootstrap admin created successfully', { username, email });
+}
 let JWT_SECRET = null;
 
 // OAuth2 Configuration
@@ -3623,6 +3705,7 @@ async function initializeDatabaseAndRuntime() {
       } else {
         logger.info('Database schema validated');
       }
+      await ensureBootstrapAdmin();
       await loadTokensFromDb();
       await ensureFlowPubSubSubscription();
       logger.info('Runtime initialized');

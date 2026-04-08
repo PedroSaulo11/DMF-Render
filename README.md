@@ -41,6 +41,16 @@ Variaveis minimas de ambiente:
 - `PG_SSL=true|false` conforme o banco
 - `JWT_SECRET=...`
 - `SIGNATURE_SECRET=...`
+- `ENABLE_STRICT_API_ONLY_AUTH=true`
+
+Bootstrap opcional de admin no startup:
+
+- `BOOTSTRAP_ADMIN_USERNAME=...`
+- `BOOTSTRAP_ADMIN_EMAIL=...`
+- `BOOTSTRAP_ADMIN_PASSWORD=...`
+- `BOOTSTRAP_ADMIN_NAME=...`
+
+Quando essas 4 variaveis estiverem definidas, o app cria ou atualiza um admin no banco durante o boot.
 
 O app usa `process.env.PORT`, entao nao precisa configurar porta manualmente.
 
@@ -87,6 +97,7 @@ npm run go-live:check
 - O login aceita `username` ou `email`.
 - Senhas sao comparadas com `bcrypt`.
 - O bootstrap do schema e das roles padrao acontece no startup via Sequelize.
+- O bootstrap opcional de admin usa as variaveis `BOOTSTRAP_ADMIN_*`.
 
 ## Operacao
 
