@@ -22,7 +22,7 @@
                     <div class="stat-card">
                         <div class="stat-title">Total Bruto</div>
                         <div class="stat-value" id="totalBruto">R$ 0,00</div>
-                        <div class="stat-meta">Fluxo atual</div>
+                        <div class="stat-meta" id="totalBrutoMeta">Empresas liberadas</div>
                     </div>
                     <div class="stat-card">
                         <div class="stat-title">Assinados</div>
@@ -34,6 +34,10 @@
                         <div class="stat-value" id="totalPendentes">0</div>
                         <div class="stat-meta">Pendentes de assinatura</div>
                     </div>
+                </div>
+                <div id="dashboardCompanyBreakdown" class="company-totals dashboard-company-breakdown">
+                    <div class="company-totals-header">Totais liberados por empresa</div>
+                    <div id="dashboardCompanyBreakdownBody" class="company-totals-body"></div>
                 </div>
                 <div class="chart-panel">
                     <canvas id="financeChart" height="100"></canvas>

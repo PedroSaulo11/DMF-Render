@@ -2545,11 +2545,12 @@ class UIManager {
 
         this.setDashboardSkeleton(true);
         this.setPaymentsSkeleton(true);
-        this.loadInitialDashboardData().then(() => {
+        this.refreshCompanyAccessUi().then(() => this.loadInitialDashboardData()).then(() => {
             this.renderPaymentsTable();
             this.updateStats();
             this.initCharts();
             this.renderMonthlyReports();
+            this.refreshDashboardStats();
             this.core.data.loadCenterCompanyOverridesFromBackend().then(() => {
                 this.renderCompanyTotals();
                 this.renderCenterCompanyEditor();
@@ -2571,6 +2572,45 @@ class UIManager {
         this.syncCurrentUserRole();
         this.applyInitialRouteFromUrl();
         console.log('DMF_CONTEXT after setupDashboard:', window.DMF_CONTEXT);
+    }
+
+    async fetchAllowedCompanies() {
+        if (!getAuthHeaders().Authorization) return ['DMF', 'JFX', 'Real Energy'];
+        try {
+            const response = await fetch(`${getApiBase()}/api/companies`, {
+                cache: 'no-store',
+                headers: { ...getAuthHeaders() }
+            });
+            if (!response.ok) return ['DMF', 'JFX', 'Real Energy'];
+            const data = await response.json().catch(() => ({}));
+            const companies = Array.isArray(data?.companies) ? data.companies.map((c) => this.normalizeCompany(c)).filter(Boolean) : [];
+            return companies.length ? Array.from(new Set(companies)) : ['DMF', 'JFX', 'Real Energy'];
+        } catch (_) {
+            return ['DMF', 'JFX', 'Real Energy'];
+        }
+    }
+
+    async refreshCompanyAccessUi() {
+        const allowedCompanies = await this.fetchAllowedCompanies();
+        this.allowedCompanies = allowedCompanies;
+        if (this.core.currentUser) {
+            this.core.currentUser.allowedCompanies = allowedCompanies.slice();
+            localStorage.setItem(this.core.storageKeys.SESSION, JSON.stringify(this.core.currentUser));
+        }
+        const buttons = Array.from(document.querySelectorAll('[data-nav="payments"][data-company]'));
+        buttons.forEach((button) => {
+            const company = this.normalizeCompany(button.getAttribute('data-company'));
+            const allowed = allowedCompanies.includes(company);
+            button.classList.toggle('hidden', !allowed);
+            button.disabled = !allowed;
+        });
+        const currentCompany = this.normalizeCompany(this.core?.data?.currentCompany || this.companyFilter || 'DMF');
+        if (allowedCompanies.length && !allowedCompanies.includes(currentCompany)) {
+            const fallback = allowedCompanies[0];
+            this.core.data.setCurrentCompany(fallback);
+            this.setCompanyFilter(fallback);
+        }
+        return allowedCompanies;
     }
 
     getFirstAvailableCompanyButton() {
@@ -2630,6 +2670,7 @@ class UIManager {
             this.core.data.loadFromBackend(true, this.core.data.currentCompany).then((ok) => {
                 if (!ok) return;
                 this.updateStats();
+                this.refreshDashboardStats();
                 this.renderMonthlyReports();
                 this.updateFlowStatusBadges();
             }).catch(() => {});
@@ -3340,6 +3381,7 @@ class UIManager {
                             <td>${u.usuario}</td>
                             <td>${u.email}</td>
                             <td>${u.cargo}</td>
+                            <td>${this.core.admin.getUserCompaniesSummary(u.id)}</td>
                             <td>
                                 <button class="btn btn-ghost" data-user-action="edit" data-user-id="${u.id}">Editar</button>
                                 <button class="btn btn-ghost" data-user-action="change-password" data-user-id="${u.id}">Trocar Senha</button>
@@ -3369,6 +3411,97 @@ class UIManager {
                 }
             });
             body.dataset.boundUsers = 'true';
+        }
+        this.renderUserCompanyAccessGrid();
+    }
+
+    renderUserCompanyAccessGrid() {
+        const container = document.getElementById('userCompanyAccessGrid');
+        const summary = document.getElementById('userCompanyAccessSummary');
+        if (!container) return;
+        const users = Array.isArray(this.core.admin.users) ? this.core.admin.users : [];
+        const companies = ['DMF', 'JFX', 'Real Energy'];
+        if (!users.length) {
+            container.innerHTML = '<div class="company-total-empty">Nenhum usuário para configurar.</div>';
+            if (summary) summary.innerHTML = '';
+            return;
+        }
+
+        const configured = users.filter((user) => this.core.admin.getUserCompanies(user.id).length > 0).length;
+        if (summary) {
+            summary.innerHTML = `
+                <span class="summary-chip">Usuários: ${users.length}</span>
+                <span class="summary-chip">Com restrição: ${configured}</span>
+                <span class="summary-chip">Empresas: ${companies.join(', ')}</span>
+            `;
+        }
+
+        container.innerHTML = users.map((user) => {
+            const selected = this.core.admin.getUserCompanies(user.id);
+            const badgeLabel = selected.length ? selected.join(', ') : 'Todas as empresas';
+            const options = companies.map((company) => `
+                <label class="user-company-access-option">
+                    <input type="checkbox" data-user-company="${user.id}" value="${company}" ${selected.includes(company) ? 'checked' : ''}>
+                    <span>${company}</span>
+                </label>
+            `).join('');
+            return `
+                <div class="user-company-access-card" data-user-company-card="${user.id}">
+                    <div class="user-company-access-header">
+                        <div>
+                            <div class="user-company-access-name">${user.nome}</div>
+                            <div class="user-company-access-meta">${user.usuario} • ${user.email} • ${String(user.cargo || '').toUpperCase()}</div>
+                        </div>
+                    </div>
+                    <div class="user-company-access-badges">
+                        <span class="user-company-access-badge">Visão atual: ${badgeLabel}</span>
+                    </div>
+                    <div class="user-company-access-options">
+                        ${options}
+                    </div>
+                    <div class="user-company-access-actions">
+                        <button class="btn btn-ghost" type="button" data-user-company-preset="${user.id}" data-mode="all">Ver as 3</button>
+                        <button class="btn btn-primary" type="button" data-user-company-save="${user.id}">Salvar empresas</button>
+                    </div>
+                </div>
+            `;
+        }).join('');
+
+        if (!container.dataset.boundUserCompanies) {
+            container.addEventListener('click', async (event) => {
+                const preset = event.target.closest('button[data-user-company-preset]');
+                if (preset) {
+                    const userId = String(preset.getAttribute('data-user-company-preset') || '');
+                    const checkboxes = container.querySelectorAll(`input[data-user-company="${userId}"]`);
+                    checkboxes.forEach((input) => {
+                        input.checked = preset.getAttribute('data-mode') === 'all';
+                    });
+                    return;
+                }
+
+                const saveButton = event.target.closest('button[data-user-company-save]');
+                if (!saveButton) return;
+                const userId = Number(saveButton.getAttribute('data-user-company-save'));
+                if (!userId) return;
+                const selected = Array.from(container.querySelectorAll(`input[data-user-company="${userId}"]:checked`))
+                    .map((input) => input.value);
+                if (!selected.length) {
+                    showToast('Selecione pelo menos uma empresa para o usuário.', 'warn');
+                    return;
+                }
+                const saved = await this.core.admin.updateUserCompanies(userId, selected);
+                if (!saved) {
+                    showToast('Falha ao salvar empresas do usuário.', 'error');
+                    return;
+                }
+                this.renderUsersTable();
+                if (Number(this.core.currentUser?.id) === Number(userId)) {
+                    await this.refreshCompanyAccessUi();
+                    await this.refreshDashboardStats();
+                }
+                showToast('Empresas do usuário atualizadas com sucesso.', 'success');
+            });
+            container.dataset.boundUserCompanies = 'true';
         }
     }
 
@@ -4206,6 +4339,7 @@ class UIManager {
         const modal = document.getElementById('createRoleModal');
         if (modal) {
             modal.classList.add('is-open');
+            setFormFeedback('createRoleFeedback', '');
         }
     }
 
@@ -4215,6 +4349,15 @@ class UIManager {
             modal.classList.remove('is-open');
             if (modalId === 'createUserModal') {
                 setFormFeedback('createUserFeedback', '');
+            }
+            if (modalId === 'createRoleModal') {
+                setFormFeedback('createRoleFeedback', '');
+            }
+            if (modalId === 'editUserModal') {
+                setFormFeedback('editUserFeedback', '');
+            }
+            if (modalId === 'changePasswordModal') {
+                setFormFeedback('changePasswordFeedback', '');
             }
         }
     }
@@ -4309,6 +4452,7 @@ class UIManager {
         document.getElementById('editUserEmail').value = user.email;
         document.getElementById('editUserRole').value = user.cargo;
         document.getElementById('editUserId').value = user.id;
+        setFormFeedback('editUserFeedback', '');
         this.openModal('editUserModal');
     }
 
@@ -4317,6 +4461,7 @@ class UIManager {
         if(!user) return;
         document.getElementById('changePasswordUserId').value = user.id;
         document.getElementById('changePasswordUserName').textContent = user.nome;
+        setFormFeedback('changePasswordFeedback', '');
         this.openModal('changePasswordModal');
     }
 
@@ -4489,6 +4634,51 @@ class UIManager {
         document.getElementById('totalPendentes').innerText = pending;
         this.updateDashboardSummary && this.updateDashboardSummary(pending);
         this.renderDueAlerts();
+        this.refreshDashboardStats();
+    }
+
+    async refreshDashboardStats() {
+        const totalEl = document.getElementById('totalBruto');
+        const signedEl = document.getElementById('totalAssinados');
+        const pendingEl = document.getElementById('totalPendentes');
+        const metaEl = document.getElementById('totalBrutoMeta');
+        const breakdownBody = document.getElementById('dashboardCompanyBreakdownBody');
+        if (!totalEl || !signedEl || !pendingEl) return;
+
+        try {
+            const response = await fetch(`${getApiBase()}/api/flow-payments/stats`, {
+                cache: 'no-store',
+                headers: { ...getAuthHeaders() }
+            });
+            if (!response.ok) return;
+            const data = await response.json().catch(() => ({}));
+            const stats = Array.isArray(data?.stats) ? data.stats : [];
+            const grand = data?.grand || {};
+            if (typeof grand.total_abs === 'number') {
+                totalEl.innerText = `R$ ${Number(grand.total_abs || 0).toLocaleString('pt-BR')}`;
+                signedEl.innerText = Number(grand.signed || 0);
+                pendingEl.innerText = Number(grand.pending || 0);
+                this.updateDashboardSummary && this.updateDashboardSummary(Number(grand.pending || 0));
+            }
+            const companyNames = stats.map((item) => item.company).filter(Boolean);
+            if (metaEl) {
+                metaEl.textContent = companyNames.length
+                    ? `Empresas liberadas: ${companyNames.join(', ')}`
+                    : 'Sem empresas liberadas';
+            }
+            if (breakdownBody) {
+                breakdownBody.innerHTML = stats.length
+                    ? stats.map((item) => `
+                        <div class="company-total-row">
+                            <span>${item.company}</span>
+                            <strong>R$ ${Number(item.total_abs || 0).toLocaleString('pt-BR')}</strong>
+                        </div>
+                    `).join('')
+                    : '<div class="company-total-empty">Sem dados para exibir.</div>';
+            }
+        } catch (_) {
+            // Mantém o fallback local do fluxo atual.
+        }
     }
 
     renderCompanyTotals() {
@@ -4772,6 +4962,7 @@ class AdminManager {
         ensureRole('gestor', ['sign_payments']);
         ensureRole('user', []);
         this.centerPermissions = JSON.parse(localStorage.getItem(core.storageKeys.COST_CENTER_RULES) || '{}');
+        this.userCompanyAccess = {};
         this.activeSessions = [];
         this.saveUsers();
         this.saveRoles();
@@ -4797,6 +4988,75 @@ class AdminManager {
 
     isValidRole(role) {
         return this.roles.some(r => r.name === role);
+    }
+
+    normalizeCompanies(companies) {
+        return Array.from(new Set((Array.isArray(companies) ? companies : [])
+            .map((company) => this.core?.ui?.normalizeCompany?.(company) || company)
+            .filter(Boolean)));
+    }
+
+    getUserCompanies(userId) {
+        return this.normalizeCompanies(this.userCompanyAccess[String(userId)] || []);
+    }
+
+    getUserCompaniesSummary(userId) {
+        const companies = this.getUserCompanies(userId);
+        if (!companies.length) return 'Todas as empresas';
+        return companies.join(', ');
+    }
+
+    async refreshUserCompanies(userId) {
+        if (!getAuthHeaders().Authorization || !userId) return [];
+        try {
+            const response = await fetch(`${getApiBase()}/api/users/${userId}/companies`, {
+                headers: {
+                    'Content-Type': 'application/json',
+                    ...getAuthHeaders()
+                }
+            });
+            if (!response.ok) {
+                console.warn('API list user companies failed:', response.status);
+                return this.getUserCompanies(userId);
+            }
+            const data = await response.json().catch(() => ({}));
+            const companies = this.normalizeCompanies(data?.companies || []);
+            this.userCompanyAccess[String(userId)] = companies;
+            return companies;
+        } catch (error) {
+            console.warn('API list user companies unavailable:', error.message);
+            return this.getUserCompanies(userId);
+        }
+    }
+
+    async refreshAllUserCompanies() {
+        await Promise.all((this.users || []).map((user) => this.refreshUserCompanies(user.id)));
+        return this.userCompanyAccess;
+    }
+
+    async updateUserCompanies(userId, companies) {
+        if (!this.requireAdmin()) return false;
+        const normalized = this.normalizeCompanies(companies);
+        try {
+            const response = await fetch(`${getApiBase()}/api/users/${userId}/companies`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                    ...getAuthHeaders()
+                },
+                body: JSON.stringify({ companies: normalized })
+            });
+            if (!response.ok) {
+                console.warn('API update user companies failed:', response.status);
+                return false;
+            }
+            this.userCompanyAccess[String(userId)] = normalized;
+            this.core.audit.log('EMPRESAS USUÁRIO', `Empresas atualizadas para o usuário ${userId}: ${normalized.join(', ') || 'todas'}.`);
+            return true;
+        } catch (error) {
+            console.warn('API update user companies unavailable:', error.message);
+            return false;
+        }
     }
 
     validateUserInput({ nome, usuario, email, senha, cargo }, { allowPartial = false } = {}) {
@@ -4862,6 +5122,7 @@ class AdminManager {
             this.saveUsers();
             window.DMF_CONTEXT.usuarios = this.users;
             window.DMF_BRAIN.usuarios = this.users;
+            await this.refreshAllUserCompanies();
             return true;
         } catch (error) {
             console.warn('API list users unavailable:', error.message);
@@ -5137,8 +5398,9 @@ class AdminManager {
         return newUser;
     }
 
-    async updateUser(id, updates) {
+    async updateUser(id, updates, options = {}) {
         if (!this.requireAdmin()) return;
+        const feedbackId = options.feedbackId || '';
         const user = this.users.find(u => Number(u.id) === Number(id));
         if (!user) return;
         const normalizedUpdates = { ...updates };
@@ -5153,19 +5415,22 @@ class AdminManager {
             cargo: normalizedUpdates.cargo
         }, { allowPartial: true });
         if (errors.length) {
-            alert(errors.join('\n'));
+            if (feedbackId) setFormFeedback(feedbackId, errors, 'error', 'Corrija os campos abaixo');
+            else alert(errors.join('\n'));
             return;
         }
 
         // Check for duplicate usuario or email if changing (local cache)
         if (normalizedUpdates.usuario && normalizedUpdates.usuario !== user.usuario &&
             this.users.some(u => this.normalizeUsername(u.usuario) === normalizedUpdates.usuario)) {
-            alert('Usuário já existe.');
+            if (feedbackId) setFormFeedback(feedbackId, 'Usuário já existe.', 'error', 'Não foi possível atualizar o usuário');
+            else alert('Usuário já existe.');
             return;
         }
         if (normalizedUpdates.email && normalizedUpdates.email !== user.email &&
             this.users.some(u => this.normalizeEmail(u.email) === normalizedUpdates.email)) {
-            alert('Email já existe.');
+            if (feedbackId) setFormFeedback(feedbackId, 'Email já existe.', 'error', 'Não foi possível atualizar o usuário');
+            else alert('Email já existe.');
             return;
         }
 
@@ -5191,24 +5456,29 @@ class AdminManager {
                 const data = await response.json();
                 apiUpdated = data.user || null;
             } else if (response.status === 409) {
-                alert('Usuário já existe.');
+                if (feedbackId) setFormFeedback(feedbackId, 'Usuário ou email já cadastrado.', 'error', 'Não foi possível atualizar o usuário');
+                else alert('Usuário já existe.');
                 return;
             } else if (response.status === 401 || response.status === 403) {
-                alert('Sem permissão para atualizar usuários.');
+                if (feedbackId) setFormFeedback(feedbackId, 'Sem permissão para atualizar usuários.', 'error', 'Ação não autorizada');
+                else alert('Sem permissão para atualizar usuários.');
                 return;
             } else {
                 console.warn('API update failed:', response.status);
-                alert('Falha ao atualizar usuário no servidor.');
+                if (feedbackId) setFormFeedback(feedbackId, 'Falha ao atualizar usuário no servidor.', 'error', 'Erro de comunicação');
+                else alert('Falha ao atualizar usuário no servidor.');
                 return;
             }
         } catch (error) {
             console.warn('API update unavailable:', error.message);
-            alert('Falha ao atualizar usuário no servidor.');
+            if (feedbackId) setFormFeedback(feedbackId, 'Falha ao atualizar usuário no servidor.', 'error', 'Erro de comunicação');
+            else alert('Falha ao atualizar usuário no servidor.');
             return;
         }
 
         if (!apiUpdated) {
-            alert('Falha ao atualizar usuário no servidor.');
+            if (feedbackId) setFormFeedback(feedbackId, 'Falha ao atualizar usuário no servidor.', 'error', 'Erro de comunicação');
+            else alert('Falha ao atualizar usuário no servidor.');
             return;
         }
 
@@ -5235,7 +5505,9 @@ class AdminManager {
 
         this.saveUsers();
         this.core.audit.log('ATUALIZAÇÃO USUÁRIO', `Usuário ${user.nome} atualizado.`);
-        alert('Usuário atualizado com sucesso.');
+        if (feedbackId) setFormFeedback(feedbackId, 'Usuário atualizado com sucesso.', 'ok', 'Tudo certo');
+        else alert('Usuário atualizado com sucesso.');
+        return user;
     }
 
     async deleteUser(id) {
@@ -5317,6 +5589,7 @@ class AdminManager {
 
     createRoleFromModal() {
         if (!this.requireAdmin()) return;
+        setFormFeedback('createRoleFeedback', '');
         const form = document.getElementById('createRoleForm');
         const formData = new FormData(form);
         const name = formData.get('roleName')?.trim();
@@ -5348,11 +5621,11 @@ class AdminManager {
         if (auditLogin) permissions.push('audit_login_access');
 
         if (!name) {
-            alert('Por favor, preencha o nome do cargo.');
+            setFormFeedback('createRoleFeedback', 'Por favor, preencha o nome do cargo.', 'error', 'Não foi possível criar o cargo');
             return;
         }
         if (permissions.length === 0) {
-            alert('Por favor, selecione pelo menos uma permissão.');
+            setFormFeedback('createRoleFeedback', 'Por favor, selecione pelo menos uma permissão.', 'error', 'Não foi possível criar o cargo');
             return;
         }
 
@@ -5366,6 +5639,7 @@ class AdminManager {
         this.core.audit.log('CRIAÇÃO CARGO', `Cargo ${name} criado com permissões: ${permissions.join(', ')}.`);
         this.upsertRoleToApi(newRole);
         this.sendRoleEvent('create', newRole);
+        setFormFeedback('createRoleFeedback', 'Cargo criado com sucesso.', 'ok', 'Tudo certo');
         this.core.ui.closeModal('createRoleModal');
         this.core.ui.renderRolesTable();
         form.reset();

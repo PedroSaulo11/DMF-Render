@@ -2086,12 +2086,18 @@ app.get('/api/flow-payments', authenticateToken, authorizeRole('user'), requireC
 });
 
 // Diagnostics: summarize current flow data by company (admin only).
-app.get('/api/flow-payments/stats', authenticateToken, authorizeRole('admin'), authorizePermission('admin_access'), async (req, res) => {
+app.get('/api/flow-payments/stats', authenticateToken, authorizeRole('user'), async (req, res) => {
   try {
     if (!isDbReady()) {
       return res.status(503).json({ error: 'Database not ready' });
     }
-    const companies = DEFAULT_COMPANIES_UNIQUE;
+    let companies = DEFAULT_COMPANIES_UNIQUE;
+    if (normalizeRole(req.user?.role) !== 'admin') {
+      const scoped = await resolveCompanyAccess(req.user?.id, req.user?.role);
+      if (Array.isArray(scoped) && scoped.length > 0) {
+        companies = scoped;
+      }
+    }
     const stats = await getFlowPaymentsStats(companies);
     const grand = stats.reduce((acc, s) => {
       acc.count += Number(s.count || 0) || 0;
@@ -3130,8 +3136,17 @@ app.get('/api/ops/metrics', authenticateToken, authorizeRole('admin'), authorize
 });
 
 app.get('/api/companies', authenticateToken, authorizeRole('user'), (req, res) => {
-  // Used by the UI to list/select companies safely.
-  res.json({ companies: DEFAULT_COMPANIES_UNIQUE });
+  Promise.resolve(resolveCompanyAccess(req.user?.id, req.user?.role))
+    .then((companies) => {
+      if (Array.isArray(companies) && companies.length > 0) {
+        return res.json({ companies });
+      }
+      return res.json({ companies: DEFAULT_COMPANIES_UNIQUE });
+    })
+    .catch((error) => {
+      logger.error('Failed to resolve company access', { error: error.message });
+      res.status(500).json({ error: 'Failed to resolve company access' });
+    });
 });
 
 // Admin: list roles
