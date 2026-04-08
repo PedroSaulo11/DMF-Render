@@ -149,6 +149,49 @@ function setLoginBusy(isBusy) {
     button.textContent = isBusy ? 'Entrando...' : button.dataset.defaultLabel;
 }
 
+function setFormFeedback(elementId, message, tone = 'error', title = '') {
+    const el = document.getElementById(elementId);
+    if (!el) return;
+
+    const messages = Array.isArray(message)
+        ? message.filter(Boolean).map(item => String(item).trim()).filter(Boolean)
+        : [String(message || '').trim()].filter(Boolean);
+
+    el.classList.remove('hidden', 'is-ok', 'is-warn');
+
+    if (!messages.length) {
+        el.classList.add('hidden');
+        el.textContent = '';
+        return;
+    }
+
+    if (tone === 'ok') el.classList.add('is-ok');
+    else if (tone === 'warn') el.classList.add('is-warn');
+
+    el.innerHTML = '';
+
+    if (title) {
+        const heading = document.createElement('strong');
+        heading.textContent = title;
+        el.appendChild(heading);
+    }
+
+    if (messages.length === 1) {
+        const text = document.createElement('div');
+        text.textContent = messages[0];
+        el.appendChild(text);
+        return;
+    }
+
+    const list = document.createElement('ul');
+    messages.forEach(entry => {
+        const item = document.createElement('li');
+        item.textContent = entry;
+        list.appendChild(item);
+    });
+    el.appendChild(list);
+}
+
 async function refreshLoginRuntimeStatus() {
     const host = (window.location && window.location.hostname) ? window.location.hostname : '';
     const localRuntime = host === 'localhost' || host === '127.0.0.1';
@@ -4122,6 +4165,7 @@ class UIManager {
         const modal = document.getElementById('createUserModal');
         if (modal) {
             modal.classList.add('is-open');
+            setFormFeedback('createUserFeedback', '');
             // Populate role select
             const roleSelect = document.getElementById('userRole');
             roleSelect.innerHTML = '<option value="">Selecione um cargo</option>';
@@ -4145,6 +4189,9 @@ class UIManager {
         const modal = document.getElementById(modalId);
         if (modal) {
             modal.classList.remove('is-open');
+            if (modalId === 'createUserModal') {
+                setFormFeedback('createUserFeedback', '');
+            }
         }
     }
 
@@ -4967,9 +5014,10 @@ class AdminManager {
 
     async createUser(nome, email, senha, cargo, usuario = null) {
         if (!this.requireAdmin()) return;
+        setFormFeedback('createUserFeedback', '');
         // Validate required fields
         if (!nome || !email || !senha || !cargo) {
-            alert('Todos os campos são obrigatórios.');
+            setFormFeedback('createUserFeedback', 'Todos os campos são obrigatórios.', 'error', 'Não foi possível criar o usuário');
             return;
         }
         const normalizedEmail = this.normalizeEmail(email);
@@ -4982,16 +5030,16 @@ class AdminManager {
             cargo
         });
         if (errors.length) {
-            alert(errors.join('\n'));
+            setFormFeedback('createUserFeedback', errors, 'error', 'Corrija os campos abaixo');
             return;
         }
         // Check for duplicate usuario or email
         if (this.users.some(u => this.normalizeUsername(u.usuario) === normalizedUsername)) {
-            alert('Usuário já existe.');
+            setFormFeedback('createUserFeedback', 'Usuário já existe.', 'error', 'Não foi possível criar o usuário');
             return;
         }
         if (this.users.some(u => this.normalizeEmail(u.email) === normalizedEmail)) {
-            alert('Email já existe.');
+            setFormFeedback('createUserFeedback', 'Email já existe.', 'error', 'Não foi possível criar o usuário');
             return;
         }
         let apiUser = null;
@@ -5016,17 +5064,34 @@ class AdminManager {
                 const data = await response.json();
                 apiUser = data.user;
             } else if (response.status === 409) {
-                alert('Usuário já existe.');
+                setFormFeedback('createUserFeedback', 'Usuário ou email já cadastrado.', 'error', 'Não foi possível criar o usuário');
                 return;
             } else {
+                let apiErrorMessage = 'Falha ao criar usuário no servidor. Verifique os dados informados.';
+                try {
+                    const payload = await response.json();
+                    if (payload?.error && typeof payload.error === 'string') {
+                        apiErrorMessage = payload.error.trim();
+                    } else if (Array.isArray(payload?.errors) && payload.errors.length) {
+                        apiErrorMessage = payload.errors
+                            .map(item => item?.msg || item?.message || '')
+                            .filter(Boolean);
+                    }
+                } catch (_) {
+                    // ignore non-json responses
+                }
                 console.warn('API register failed:', response.status);
+                setFormFeedback('createUserFeedback', apiErrorMessage, 'error', 'Não foi possível criar o usuário');
+                return;
             }
         } catch (error) {
             console.warn('API register unavailable:', error.message);
+            setFormFeedback('createUserFeedback', 'Falha ao criar usuário no servidor. Verifique sua conexão e tente novamente.', 'error', 'Erro de comunicação');
+            return;
         }
 
         if (!apiUser) {
-            alert('Falha ao criar usuário no servidor. Verifique sua conexão e tente novamente.');
+            setFormFeedback('createUserFeedback', 'Falha ao criar usuário no servidor. Verifique sua conexão e tente novamente.', 'error', 'Erro de comunicação');
             return;
         }
 
@@ -5043,6 +5108,7 @@ class AdminManager {
         window.DMF_CONTEXT.usuarios = this.users;
         console.log('DMF_CONTEXT after createUser:', window.DMF_CONTEXT);
         this.core.audit.log('CRIAÇÃO USUÁRIO', `Usuário ${newUser.nome} criado com cargo ${cargo}.`);
+        setFormFeedback('createUserFeedback', 'Usuário criado com sucesso.', 'ok', 'Tudo certo');
         alert('Usuário criado com sucesso.');
         return newUser;
     }
@@ -5221,7 +5287,7 @@ class AdminManager {
                 form.reset();
             });
         } else {
-            alert('Por favor, preencha todos os campos obrigatórios.');
+            setFormFeedback('createUserFeedback', 'Por favor, preencha todos os campos obrigatórios.', 'error', 'Não foi possível criar o usuário');
         }
     }
 
