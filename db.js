@@ -776,7 +776,7 @@ async function getFlowPaymentsStats(companies = null) {
   const db = getSequelize();
   const list = Array.isArray(companies) ? companies.map(normalizeCompany).filter(Boolean) : null;
   const whereSql = list && list.length
-    ? `(company = ANY(:companies))`
+    ? `(COALESCE(NULLIF(TRIM(company), ''), 'DMF') IN (:companies))`
     : `TRUE`;
 
   const rows = await db.query(
