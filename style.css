@@ -988,15 +988,17 @@ tr:hover { background: #f8fbff; }
 .toast {
     background: #0f172a;
     color: #fff;
-    padding: 12px 14px;
-    border-radius: 10px;
-    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.2);
+    padding: 14px 16px;
+    border-radius: 14px;
+    box-shadow: 0 16px 34px rgba(15, 23, 42, 0.28);
     font-size: 13px;
-    max-width: 320px;
+    max-width: 380px;
     border: 1px solid rgba(255, 255, 255, 0.12);
     opacity: 0;
     transform: translateY(-6px);
     animation: toastIn 0.2s ease forwards;
+    line-height: 1.45;
+    font-weight: 500;
 }
 
 .toast.success { background: #0f5132; }

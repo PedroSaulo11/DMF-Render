@@ -227,6 +227,30 @@ function showToast(message, type = 'info', ttl = 3500) {
     }, ttl);
 }
 
+function inferToastType(message) {
+    const text = String(message || '').toLowerCase();
+    if (!text) return 'info';
+    if (/(sucesso|concluíd|concluid|criad|salv|atualizad|removid|excluíd|excluid|conectad|ok\b)/.test(text)) {
+        return 'success';
+    }
+    if (/(atenç|atenc|pendente|aguarde|tent|limite|bloquead|expirad|indisponível|indisponivel)/.test(text)) {
+        return 'warn';
+    }
+    if (/(erro|falha|inválid|invalido|incorret|não foi possível|nao foi possivel|obrigatóri|obrigatorio|sem permissão|sem permissao)/.test(text)) {
+        return 'error';
+    }
+    return 'info';
+}
+
+function notifyUser(message, type = null, ttl = 4500) {
+    if (!message) return;
+    showToast(message, type || inferToastType(message), ttl);
+}
+
+window.alert = function(message) {
+    notifyUser(message);
+};
+
 function parseJwtPayload(token) {
     try {
         const payload = token.split('.')[1];
