@@ -2013,26 +2013,61 @@ body {
 
 .user-company-card {
     margin-top: 16px;
-    padding: 16px;
+    padding: 18px;
     background: #fff;
     border: 1px solid rgba(0, 51, 102, 0.08);
-    border-radius: 12px;
+    border-radius: 16px;
     box-shadow: 0 8px 20px rgba(0, 42, 84, 0.06);
+}
+
+.user-company-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    flex-wrap: wrap;
+}
+
+.user-company-card-body {
+    margin-top: 14px;
+}
+
+.user-company-card-body.hidden {
+    display: none;
+}
+
+.user-company-toggle {
+    padding: 0;
+    min-height: auto;
+    border: 0;
+    background: transparent;
+    color: #0f172a;
+    font-size: 22px;
+    font-weight: 700;
+    justify-content: flex-start;
+    gap: 12px;
+}
+
+.user-company-toggle:hover {
+    background: transparent;
+    color: #0d52c4;
 }
 
 .user-company-access-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-    gap: 16px;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 18px;
     margin-top: 14px;
 }
 
 .user-company-access-card {
-    padding: 16px;
-    border-radius: 12px;
+    padding: 18px;
+    border-radius: 16px;
     border: 1px solid rgba(0, 82, 204, 0.12);
     background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
     box-shadow: 0 6px 14px rgba(0, 30, 84, 0.08);
+    display: grid;
+    gap: 14px;
 }
 
 .user-company-access-header {
@@ -2040,24 +2075,28 @@ body {
     justify-content: space-between;
     align-items: flex-start;
     gap: 12px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid rgba(0, 82, 204, 0.1);
 }
 
 .user-company-access-name {
     font-weight: 700;
     color: #0f172a;
+    font-size: 18px;
 }
 
 .user-company-access-meta {
     margin-top: 4px;
     font-size: 12px;
     color: #64748b;
+    line-height: 1.5;
 }
 
 .user-company-access-badges {
     display: flex;
     flex-wrap: wrap;
     gap: 8px;
-    margin-top: 12px;
+    margin-top: 0;
 }
 
 .user-company-access-badge {
@@ -2073,23 +2112,68 @@ body {
 .user-company-access-options {
     display: grid;
     gap: 8px;
-    margin-top: 14px;
+    grid-template-columns: 1fr;
 }
 
 .user-company-access-option {
     display: flex;
     align-items: center;
     gap: 10px;
-    padding: 8px 10px;
+    padding: 12px 14px;
     border-radius: 10px;
     background: rgba(0, 82, 204, 0.05);
     color: #1f2a44;
+    border: 1px solid rgba(0, 82, 204, 0.08);
 }
 
 .user-company-access-actions {
     display: flex;
     gap: 8px;
-    margin-top: 14px;
+    margin-top: 0;
+    flex-wrap: wrap;
+}
+
+.user-company-access-actions .btn {
+    flex: 1 1 160px;
+}
+
+.user-company-access-side {
+    display: flex;
+    align-items: flex-start;
+    justify-content: flex-end;
+}
+
+.user-company-access-role {
+    padding: 6px 10px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 700;
+    color: #0d52c4;
+    background: rgba(13, 82, 196, 0.08);
+    border: 1px solid rgba(13, 82, 196, 0.12);
+}
+
+@media (max-width: 900px) {
+    .user-company-card-header {
+        align-items: flex-start;
+    }
+
+    .user-company-toggle {
+        font-size: 19px;
+    }
+
+    .user-company-access-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .user-company-access-header {
+        flex-direction: column;
+    }
+
+    .user-company-access-side {
+        width: 100%;
+        justify-content: flex-start;
+    }
 }
 
 .dashboard-company-breakdown {

@@ -13,12 +13,17 @@
                         <button id="btnCreateUser" class="btn btn-primary">Criar Usuário</button>
                         <div id="userGrid"></div>
                         <div class="card user-company-card">
-                            <div class="flex-header">
-                                <h4>Empresas Visíveis por Usuário</h4>
+                            <div class="user-company-card-header">
+                                <button id="btnUserCompanyToggle" class="btn-side-toggle user-company-toggle is-open" type="button" aria-expanded="true" aria-controls="userCompanyAccessPanel">
+                                    <span>Empresas Visíveis por Usuário</span>
+                                    <span id="userCompanyToggleIcon" class="toggle-icon" aria-hidden="true"></span>
+                                </button>
                                 <div id="userCompanyAccessSummary" class="center-company-summary"></div>
                             </div>
-                            <div class="hint">Defina quais empresas cada usuário pode visualizar no dashboard e no fluxo de pagamentos.</div>
-                            <div id="userCompanyAccessGrid" class="user-company-access-grid"></div>
+                            <div id="userCompanyAccessPanel" class="user-company-card-body">
+                                <div class="hint">Defina quais empresas cada usuário pode visualizar no dashboard e no fluxo de pagamentos.</div>
+                                <div id="userCompanyAccessGrid" class="user-company-access-grid"></div>
+                            </div>
                         </div>
                     </div>
                     <div id="sessionsTab" class="admin-tab-content hidden">

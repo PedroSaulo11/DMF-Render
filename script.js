@@ -3470,7 +3470,10 @@ class UIManager {
                     <div class="user-company-access-header">
                         <div>
                             <div class="user-company-access-name">${user.nome}</div>
-                            <div class="user-company-access-meta">${user.usuario} • ${user.email} • ${String(user.cargo || '').toUpperCase()}</div>
+                            <div class="user-company-access-meta">${user.usuario} • ${user.email}</div>
+                        </div>
+                        <div class="user-company-access-side">
+                            <span class="user-company-access-role">${String(user.cargo || 'usuario').toUpperCase()}</span>
                         </div>
                     </div>
                     <div class="user-company-access-badges">
@@ -7542,6 +7545,17 @@ function initDomBindings() {
             const isOpen = !paymentsSubmenu.classList.contains('hidden');
             paymentsToggle.classList.toggle('is-open', isOpen);
             paymentsToggle.setAttribute('aria-expanded', String(isOpen));
+        });
+    }
+
+    const userCompanyToggle = document.getElementById('btnUserCompanyToggle');
+    const userCompanyAccessPanel = document.getElementById('userCompanyAccessPanel');
+    if (userCompanyToggle && userCompanyAccessPanel) {
+        userCompanyToggle.addEventListener('click', function() {
+            userCompanyAccessPanel.classList.toggle('hidden');
+            const isOpen = !userCompanyAccessPanel.classList.contains('hidden');
+            userCompanyToggle.classList.toggle('is-open', isOpen);
+            userCompanyToggle.setAttribute('aria-expanded', String(isOpen));
         });
     }
 
