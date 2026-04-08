@@ -49,6 +49,11 @@ const {
   listCenterCompanies,
   upsertCenterCompany,
   bulkUpsertCenterCompanies,
+  getUserCenterAccess,
+  listUserCenterAccess,
+  upsertUserCenterAccess,
+  listBudgetLimits,
+  upsertBudgetLimit,
   insertBackupSnapshot,
   listBackupSnapshots,
   insertLoginAudit,
@@ -422,9 +427,9 @@ async function hasPermission(role, permission) {
 async function resolveCompanyAccess(userId, role) {
   if (!ENFORCE_COMPANY_ACCESS) return null;
   if (!isDbReady()) return null;
-  if (normalizeRole(role) === 'admin') return null;
   const companies = await listUserCompanies(userId);
   if (companies && companies.length) return companies;
+  if (normalizeRole(role) === 'admin') return null;
   // If user access wasn't configured, fall back to a fixed default list
   // (prevents "company" query param from becoming an unbounded tenant selector).
   if (DEFAULT_COMPANIES_UNIQUE.length) return DEFAULT_COMPANIES_UNIQUE;
@@ -443,9 +448,11 @@ async function enforceCompanyAccess(req, res, next) {
     });
     return res.status(403).json({ error: 'Company not allowed' });
   }
-  if (normalizeRole(role) === 'admin') return next();
   const companies = await resolveCompanyAccess(req.user?.id, role);
   if (!companies || companies.length === 0) {
+    if (normalizeRole(role) === 'admin') {
+      return next();
+    }
     if (ALLOW_ALL_COMPANIES_WHEN_UNSET) {
       return next();
     }
@@ -2092,11 +2099,9 @@ app.get('/api/flow-payments/stats', authenticateToken, authorizeRole('user'), as
       return res.status(503).json({ error: 'Database not ready' });
     }
     let companies = DEFAULT_COMPANIES_UNIQUE;
-    if (normalizeRole(req.user?.role) !== 'admin') {
-      const scoped = await resolveCompanyAccess(req.user?.id, req.user?.role);
-      if (Array.isArray(scoped) && scoped.length > 0) {
-        companies = scoped;
-      }
+    const scoped = await resolveCompanyAccess(req.user?.id, req.user?.role);
+    if (Array.isArray(scoped) && scoped.length > 0) {
+      companies = scoped;
     }
     const stats = await getFlowPaymentsStats(companies);
     const grand = stats.reduce((acc, s) => {
@@ -2427,7 +2432,7 @@ app.get('/api/flow-archives', authenticateToken, authorizeRole('user'), authoriz
     const requestedCompany = normalizeCompany(req.query.company);
     let archives = await listFlowArchives(requestedCompany || null);
 
-    if (!requestedCompany && ENFORCE_COMPANY_ACCESS && normalizeRole(req.user?.role) !== 'admin') {
+    if (!requestedCompany && ENFORCE_COMPANY_ACCESS) {
       const companies = await resolveCompanyAccess(req.user?.id, req.user?.role);
       if (Array.isArray(companies) && companies.length > 0) {
         const allowed = new Set(companies.map(c => normalizeCompany(c)).filter(Boolean));
@@ -2572,9 +2577,9 @@ app.patch(
     }
 
     const archiveCompany = normalizeCompany(archive.company || req.query.company || req.body?.company) || 'DMF';
-    if (ENFORCE_COMPANY_ACCESS && normalizeRole(req.user?.role) !== 'admin') {
+    if (ENFORCE_COMPANY_ACCESS) {
       const companies = await resolveCompanyAccess(req.user?.id, req.user?.role);
-      if ((!companies || companies.length === 0) && !ALLOW_ALL_COMPANIES_WHEN_UNSET) {
+      if ((!companies || companies.length === 0) && normalizeRole(req.user?.role) !== 'admin' && !ALLOW_ALL_COMPANIES_WHEN_UNSET) {
         await recordAuditEvent(req, 'COMPANY_ACCESS_DENIED', 'Nenhuma empresa liberada para assinatura em fluxo arquivado.', {
           company: archiveCompany,
           archiveId,
@@ -3279,6 +3284,110 @@ app.post(
     res.status(500).json({ error: 'Failed to update center companies' });
   }
 });
+
+app.get('/api/center-access/me', authenticateToken, authorizeRole('user'), async (req, res) => {
+  try {
+    if (!isDbReady()) {
+      return res.status(503).json({ error: 'Database not ready' });
+    }
+    const item = await getUserCenterAccess(req.user.id);
+    res.json({ item });
+  } catch (error) {
+    logger.error('Failed to load current user center access', { error: error.message });
+    res.status(500).json({ error: 'Failed to load center access' });
+  }
+});
+
+app.get('/api/users/:id/center-access', authenticateToken, authorizeRole('admin'), authorizePermission('user_manage'), async (req, res) => {
+  try {
+    if (!isDbReady()) {
+      return res.status(503).json({ error: 'Database not ready' });
+    }
+    const userId = Number(req.params.id);
+    const item = await getUserCenterAccess(userId);
+    res.json({ item });
+  } catch (error) {
+    logger.error('Failed to load user center access', { error: error.message });
+    res.status(500).json({ error: 'Failed to load user center access' });
+  }
+});
+
+app.put(
+  '/api/users/:id/center-access',
+  authenticateToken,
+  authorizeRole('admin'),
+  authorizePermission('user_manage'),
+  validateRequest([
+    param('id').isInt().withMessage('Valid user ID required'),
+    body('mode').isIn(['all', 'allow']).withMessage('Valid access mode required'),
+    body('centers').optional().isArray().withMessage('Centers must be an array')
+  ]),
+  async (req, res) => {
+    try {
+      if (!isDbReady()) {
+        return res.status(503).json({ error: 'Database not ready' });
+      }
+      const userId = Number(req.params.id);
+      const mode = req.body.mode === 'allow' ? 'allow' : 'all';
+      const centers = Array.isArray(req.body.centers) ? req.body.centers : [];
+      const item = await upsertUserCenterAccess(userId, mode, centers);
+      await recordAuditEvent(req, 'USER_CENTER_ACCESS_UPDATED', `Permissões de centro atualizadas para usuário ${userId}.`, {
+        userId,
+        mode,
+        centers: item.centers
+      });
+      res.json({ success: true, item });
+    } catch (error) {
+      logger.error('Failed to update user center access', { error: error.message });
+      res.status(500).json({ error: 'Failed to update user center access' });
+    }
+  }
+);
+
+app.get('/api/budgets', authenticateToken, authorizeRole('user'), async (req, res) => {
+  try {
+    if (!isDbReady()) {
+      return res.status(503).json({ error: 'Database not ready' });
+    }
+    const budgets = await listBudgetLimits();
+    res.json({ budgets });
+  } catch (error) {
+    logger.error('Failed to list budget limits', { error: error.message });
+    res.status(500).json({ error: 'Failed to list budgets' });
+  }
+});
+
+app.put(
+  '/api/budgets',
+  authenticateToken,
+  authorizeRole('admin'),
+  authorizePermission('admin_access'),
+  validateRequest([
+    body('budgets').isObject().withMessage('Budgets object required')
+  ]),
+  async (req, res) => {
+    try {
+      if (!isDbReady()) {
+        return res.status(503).json({ error: 'Database not ready' });
+      }
+      const rawBudgets = req.body.budgets || {};
+      const updates = {};
+      for (const [company, amount] of Object.entries(rawBudgets)) {
+        const normalizedCompany = normalizeCompany(company);
+        if (!normalizedCompany) continue;
+        updates[normalizedCompany] = Number(amount) || 0;
+        await upsertBudgetLimit(normalizedCompany, updates[normalizedCompany]);
+      }
+      await recordAuditEvent(req, 'BUDGET_LIMITS_UPDATED', 'Limites de orçamento atualizados.', {
+        budgets: updates
+      });
+      res.json({ success: true, budgets: await listBudgetLimits() });
+    } catch (error) {
+      logger.error('Failed to update budget limits', { error: error.message });
+      res.status(500).json({ error: 'Failed to update budgets' });
+    }
+  }
+);
 
 // Admin: upsert role
 app.put(

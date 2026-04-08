@@ -147,6 +147,19 @@ const CenterCompanyModel = () => getSequelize().define('app_center_companies', {
   updated_at: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
 }, { timestamps: false, freezeTableName: true });
 
+const UserCenterAccessModel = () => getSequelize().define('app_user_center_access', {
+  user_id: { type: DataTypes.BIGINT, primaryKey: true },
+  mode: { type: DataTypes.TEXT, allowNull: false, defaultValue: 'all' },
+  centers: { type: DataTypes.JSONB, allowNull: false, defaultValue: [] },
+  updated_at: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
+}, { timestamps: false, freezeTableName: true });
+
+const BudgetLimitModel = () => getSequelize().define('app_budget_limits', {
+  company: { type: DataTypes.TEXT, primaryKey: true },
+  amount: { type: DataTypes.DOUBLE, allowNull: false, defaultValue: 0 },
+  updated_at: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
+}, { timestamps: false, freezeTableName: true });
+
 function normalizeCenterKey(value) {
   return String(value || '').trim().toLowerCase();
 }
@@ -238,6 +251,8 @@ async function initDb() {
       UserRefreshSessionModel();
       UserCompanyModel();
       CenterCompanyModel();
+      UserCenterAccessModel();
+      BudgetLimitModel();
       BackupSnapshotModel();
       WebhookModel();
       await db.sync();
@@ -1192,6 +1207,73 @@ async function bulkUpsertCenterCompanies(items) {
   return count;
 }
 
+async function getUserCenterAccess(userId) {
+  const Access = UserCenterAccessModel();
+  const row = await Access.findByPk(userId);
+  if (!row) return { user_id: Number(userId), mode: 'all', centers: [] };
+  const item = row.toJSON();
+  return {
+    user_id: Number(item.user_id),
+    mode: item.mode === 'allow' ? 'allow' : 'all',
+    centers: Array.isArray(item.centers) ? item.centers.map(normalizeCenterKey).filter(Boolean) : [],
+    updated_at: item.updated_at || null
+  };
+}
+
+async function listUserCenterAccess() {
+  const Access = UserCenterAccessModel();
+  const rows = await Access.findAll();
+  return rows.map((row) => {
+    const item = row.toJSON();
+    return {
+      user_id: Number(item.user_id),
+      mode: item.mode === 'allow' ? 'allow' : 'all',
+      centers: Array.isArray(item.centers) ? item.centers.map(normalizeCenterKey).filter(Boolean) : [],
+      updated_at: item.updated_at || null
+    };
+  });
+}
+
+async function upsertUserCenterAccess(userId, mode, centers) {
+  const Access = UserCenterAccessModel();
+  const normalizedCenters = Array.from(new Set((Array.isArray(centers) ? centers : [])
+    .map(normalizeCenterKey)
+    .filter(Boolean)));
+  await Access.upsert({
+    user_id: Number(userId),
+    mode: mode === 'allow' ? 'allow' : 'all',
+    centers: normalizedCenters,
+    updated_at: new Date()
+  });
+  return getUserCenterAccess(userId);
+}
+
+async function listBudgetLimits() {
+  const Budget = BudgetLimitModel();
+  const rows = await Budget.findAll();
+  const out = {};
+  rows.forEach((row) => {
+    const item = row.toJSON();
+    const company = normalizeCompany(item.company);
+    if (!company) return;
+    out[company] = Number(item.amount) || 0;
+  });
+  return out;
+}
+
+async function upsertBudgetLimit(company, amount) {
+  const Budget = BudgetLimitModel();
+  const normalizedCompany = normalizeCompany(company);
+  if (!normalizedCompany) return null;
+  await Budget.upsert({
+    company: normalizedCompany,
+    amount: Number(amount) || 0,
+    updated_at: new Date()
+  });
+  const row = await Budget.findByPk(normalizedCompany);
+  return row ? row.toJSON() : null;
+}
+
 async function insertBackupSnapshot({ createdBy, payload }) {
   const Backup = BackupSnapshotModel();
   const row = await Backup.create({
@@ -1245,6 +1327,11 @@ module.exports = {
   listCenterCompanies,
   upsertCenterCompany,
   bulkUpsertCenterCompanies,
+  getUserCenterAccess,
+  listUserCenterAccess,
+  upsertUserCenterAccess,
+  listBudgetLimits,
+  upsertBudgetLimit,
   insertBackupSnapshot,
   listBackupSnapshots,
   insertLoginAudit,

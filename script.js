@@ -412,6 +412,7 @@ class DMFSystem {
     }
 
     init() {
+        this.clearLegacyBusinessStorage();
         this.sync = new SyncManager(this);
         this.data = new DataProcessor(this);
         this.auth = new AuthManager(this);
@@ -421,6 +422,16 @@ class DMFSystem {
         this.cobli = new CobliManager(this);
 
         this.checkSession();
+    }
+
+    clearLegacyBusinessStorage() {
+        try {
+            localStorage.removeItem(this.storageKeys.USERS);
+            localStorage.removeItem(this.storageKeys.ROLES);
+            localStorage.removeItem(this.storageKeys.LOGS);
+        } catch (_) {
+            // Ignore storage cleanup failures and continue startup.
+        }
     }
 
     checkSession() {
@@ -1813,6 +1824,7 @@ class UIManager {
         this.flowStreamReconnectMs = 2000;
         this.dashboardSyncTimer = null;
         this.pendingCenterCompanyUpdates = new Map();
+        this.budgets = {};
         this.signatureIdCollapsed = localStorage.getItem('dmf_signature_id_collapsed') !== 'false';
         this.paymentFilterStoragePrefix = 'dmf_payment_filters';
         this.selectedPaymentIds = new Set();
@@ -2545,7 +2557,10 @@ class UIManager {
 
         this.setDashboardSkeleton(true);
         this.setPaymentsSkeleton(true);
-        this.refreshCompanyAccessUi().then(() => this.loadInitialDashboardData()).then(() => {
+        this.refreshCompanyAccessUi().then(() => Promise.all([
+            this.core.admin.refreshCurrentUserCenterRule?.(),
+            this.refreshBudgetsFromApi?.()
+        ])).then(() => this.loadInitialDashboardData()).then(() => {
             this.renderPaymentsTable();
             this.updateStats();
             this.initCharts();
@@ -3074,7 +3089,7 @@ class UIManager {
         } else if (tab === 'logs') {
             this.setAuditTableSkeleton('logs', true);
             Promise.resolve().then(() => {
-                this.core?.audit?.renderLogs?.();
+                return this.core?.audit?.refreshLogs?.();
             }).finally(() => {
                 this.setAuditTableSkeleton('logs', false);
             });
@@ -3100,6 +3115,9 @@ class UIManager {
     renderAdminContent() {
         if (this.core.admin.hasPermission(this.core.currentUser, 'admin_access')) {
             this.core.admin.refreshUsersFromApi().then(() => {
+                this.core.admin.refreshAllCenterPermissions().finally(() => {
+                    this.renderCenterPermissions();
+                });
                 this.renderUsersTable();
             });
             if (isAdminUser(this.core.currentUser)) {
@@ -3116,7 +3134,9 @@ class UIManager {
             this.renderUsersTable();
         }
         this.renderRolesTable();
-        this.renderCenterPermissions();
+        if (!this.core.admin.hasPermission(this.core.currentUser, 'admin_access')) {
+            this.renderCenterPermissions();
+        }
     }
 
     applyRolePermissions() {
@@ -3606,15 +3626,15 @@ class UIManager {
             <button class="btn btn-primary btn-top-spaced" data-role-action="create">Criar Novo Cargo</button>
         `;
         if (!body.dataset.boundRoles) {
-            body.addEventListener('click', (event) => {
+            body.addEventListener('click', async (event) => {
                 const button = event.target.closest('button[data-role-action]');
                 if (!button) return;
                 const action = button.getAttribute('data-role-action');
                 const id = Number(button.getAttribute('data-role-id'));
                 if (action === 'edit' && id) {
-                    this.editRole(id);
+                    await this.editRole(id);
                 } else if (action === 'delete' && id) {
-                    this.core.admin.deleteRole(id);
+                    await this.core.admin.deleteRole(id);
                     this.renderRolesTable();
                 } else if (action === 'create') {
                     this.openCreateRoleModal();
@@ -3713,7 +3733,7 @@ class UIManager {
         }).join('');
 
         if (!container.dataset.boundCenters) {
-            container.addEventListener('click', (event) => {
+            container.addEventListener('click', async (event) => {
                 const actionBtn = event.target.closest('[data-cc-action]');
                 if (!actionBtn) return;
                 const card = event.target.closest('.center-permission-card');
@@ -3730,9 +3750,13 @@ class UIManager {
                     const mode = modeInput ? modeInput.value : 'all';
                     const selected = Array.from(card.querySelectorAll('input[type="checkbox"][data-center-name]:checked'))
                         .map(i => i.getAttribute('data-center-name'));
-                    this.core.admin.setUserCenterRule(userId, { mode, centers: selected });
-                    showToast('Permissões de centros atualizadas.', 'success');
-                    editor?.classList.add('hidden');
+                    const saved = await this.core.admin.setUserCenterRule(userId, { mode, centers: selected });
+                    if (saved) {
+                        showToast('Permissões de centros atualizadas.', 'success');
+                        editor?.classList.add('hidden');
+                    } else {
+                        showToast('Falha ao salvar permissões de centros.', 'warn');
+                    }
                 }
             });
             container.dataset.boundCenters = 'true';
@@ -3851,16 +3875,58 @@ class UIManager {
     }
 
     loadBudgets() {
+        return this.budgets || {};
+    }
+
+    async refreshBudgetsFromApi() {
+        if (!getAuthHeaders().Authorization) return this.loadBudgets();
         try {
-            const raw = localStorage.getItem('dmf_budget_limits');
-            return raw ? JSON.parse(raw) : {};
-        } catch (_) {
-            return {};
+            const response = await fetch(`${getApiBase()}/api/budgets`, {
+                headers: {
+                    'Content-Type': 'application/json',
+                    ...getAuthHeaders()
+                }
+            });
+            if (!response.ok) {
+                console.warn('API list budgets failed:', response.status);
+                return this.loadBudgets();
+            }
+            const data = await response.json().catch(() => ({}));
+            this.budgets = data?.budgets && typeof data.budgets === 'object' ? data.budgets : {};
+            return this.loadBudgets();
+        } catch (error) {
+            console.warn('API list budgets unavailable:', error.message);
+            return this.loadBudgets();
         }
     }
 
-    saveBudgets(budgets) {
-        localStorage.setItem('dmf_budget_limits', JSON.stringify(budgets || {}));
+    async saveBudgets(budgets) {
+        try {
+            const response = await fetch(`${getApiBase()}/api/budgets`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                    ...getAuthHeaders()
+                },
+                body: JSON.stringify({ budgets: budgets || {} })
+            });
+            if (!response.ok) {
+                let apiMessage = 'Falha ao salvar orçamentos.';
+                try {
+                    const payload = await response.json();
+                    apiMessage = payload?.error || apiMessage;
+                } catch (_) {
+                    // ignore invalid payload
+                }
+                throw new Error(apiMessage);
+            }
+            const data = await response.json().catch(() => ({}));
+            this.budgets = data?.budgets && typeof data.budgets === 'object' ? data.budgets : (budgets || {});
+            return true;
+        } catch (error) {
+            showToast(error.message || 'Falha ao salvar orçamentos.', 'warn');
+            return false;
+        }
     }
 
     renderMonthlyReports() {
@@ -4506,13 +4572,13 @@ class UIManager {
         alert('Senha alterada com sucesso.');
     }
 
-    editRole(id) {
+    async editRole(id) {
         const role = this.core.admin.roles.find(r => r.id === id);
         if(!role) return;
         const name = prompt('Nome do cargo:', role.name);
         const permissions = prompt('Permissões (separadas por vírgula):', role.permissions.join(', '));
         if(name && permissions) {
-            this.core.admin.updateRole(id, { name, permissions: permissions.split(',').map(p => p.trim()) });
+            await this.core.admin.updateRole(id, { name, permissions: permissions.split(',').map(p => p.trim()) });
             this.renderRolesTable();
         }
     }
@@ -4794,10 +4860,53 @@ class UIManager {
 class AuditLogger {
     constructor(core) {
         this.core = core;
-        this.logs = JSON.parse(localStorage.getItem(core.storageKeys.LOGS)) || [];
+        this.logs = [];
         this.filterText = '';
         window.DMF_CONTEXT.logs = this.logs;
         console.log('DMF_CONTEXT after AuditLogger init:', window.DMF_CONTEXT);
+    }
+
+    normalizeAuditEntry(item) {
+        return {
+            acao: item?.action || item?.acao || '',
+            detalhes: item?.details || item?.detalhes || '',
+            entidade: item?.metadata?.entity || item?.entidade || null,
+            recordId: item?.metadata?.recordId || item?.recordId || null,
+            userId: item?.user_id || item?.userId || null,
+            userEmail: item?.username || item?.userEmail || null,
+            dataISO: item?.created_at || item?.dataISO || new Date().toISOString(),
+            userAgent: item?.user_agent || item?.userAgent || null
+        };
+    }
+
+    async refreshLogs(limit = 200) {
+        if (!getAuthHeaders().Authorization) {
+            this.logs = [];
+            window.DMF_CONTEXT.logs = this.logs;
+            this.renderLogs();
+            return false;
+        }
+        try {
+            const response = await fetch(`${getApiBase()}/api/audit/events?limit=${encodeURIComponent(limit)}`, {
+                cache: 'no-store',
+                headers: {
+                    'Content-Type': 'application/json',
+                    ...getAuthHeaders()
+                }
+            });
+            if (!response.ok) {
+                this.renderLogs();
+                return false;
+            }
+            const data = await response.json().catch(() => ({}));
+            this.logs = (Array.isArray(data?.items) ? data.items : []).map((item) => this.normalizeAuditEntry(item));
+            window.DMF_CONTEXT.logs = this.logs;
+            this.renderLogs();
+            return true;
+        } catch (_) {
+            this.renderLogs();
+            return false;
+        }
     }
 
     log(acao, detalhes, entidade = null, recordId = null) {
@@ -4812,7 +4921,6 @@ class AuditLogger {
             userAgent: navigator.userAgent
         };
         this.logs.unshift(entry);
-        localStorage.setItem(this.core.storageKeys.LOGS, JSON.stringify(this.logs));
         window.DMF_CONTEXT.logs = this.logs;
         console.log('DMF_CONTEXT after log:', window.DMF_CONTEXT);
         this.renderLogs();
@@ -4903,45 +5011,8 @@ class AuditLogger {
 class AdminManager {
     constructor(core) {
         this.core = core;
-        this.users = JSON.parse(localStorage.getItem(core.storageKeys.USERS)) || [
-            { id: 1, nome: 'Administrador DMF', email: 'admin@dmf.local', senha: hash('Admin@123'), cargo: 'admin', usuario: 'admin' }
-        ];
-
-        // Migrate existing users to new structure if needed
-        this.users.forEach(user => {
-            if (user.role) {
-                user.cargo = user.role;
-                delete user.role;
-            }
-            if (user.password) {
-                user.senha = user.password;
-                delete user.password;
-            }
-            if (user.username) {
-                user.usuario = user.username;
-                delete user.username;
-            }
-            if (!user.usuario) {
-                user.usuario = user.email;
-            }
-        });
-
-        // Create default admin user if not exists
-        const defaultAdminExists = this.users.some(u => u.usuario === 'admin' && u.email === 'admin@dmf.local');
-        if (!defaultAdminExists) {
-            const defaultAdmin = {
-                id: Date.now(),
-                nome: 'Administrador DMF',
-                usuario: 'admin',
-                email: 'admin@dmf.local',
-                senha: hash('admin'),
-                cargo: 'admin'
-            };
-            this.users.push(defaultAdmin);
-        }
-
-        // Load roles from localStorage with fallback
-        this.roles = JSON.parse(localStorage.getItem(core.storageKeys.ROLES)) || [
+        this.users = [];
+        this.roles = [
             { id: 1, name: 'admin', permissions: ['all'] },
             { id: 2, name: 'gestor', permissions: ['sign_payments'] },
             { id: 3, name: 'user', permissions: [] }
@@ -4961,11 +5032,9 @@ class AdminManager {
         ensureRole('admin', ['all']);
         ensureRole('gestor', ['sign_payments']);
         ensureRole('user', []);
-        this.centerPermissions = JSON.parse(localStorage.getItem(core.storageKeys.COST_CENTER_RULES) || '{}');
+        this.centerPermissions = {};
         this.userCompanyAccess = {};
         this.activeSessions = [];
-        this.saveUsers();
-        this.saveRoles();
         this.saveCenterPermissions();
         window.DMF_CONTEXT.usuarios = this.users;
         window.DMF_CONTEXT.centerPermissions = this.centerPermissions;
@@ -5032,6 +5101,68 @@ class AdminManager {
     async refreshAllUserCompanies() {
         await Promise.all((this.users || []).map((user) => this.refreshUserCompanies(user.id)));
         return this.userCompanyAccess;
+    }
+
+    async refreshUserCenterRule(userId) {
+        if (!getAuthHeaders().Authorization || !userId) return this.getUserCenterRule(userId);
+        try {
+            const response = await fetch(`${getApiBase()}/api/users/${userId}/center-access`, {
+                headers: {
+                    'Content-Type': 'application/json',
+                    ...getAuthHeaders()
+                }
+            });
+            if (!response.ok) {
+                console.warn('API list user center access failed:', response.status);
+                return this.getUserCenterRule(userId);
+            }
+            const data = await response.json().catch(() => ({}));
+            const item = data?.item || {};
+            const rule = {
+                mode: item.mode === 'allow' ? 'allow' : 'all',
+                centers: Array.isArray(item.centers) ? item.centers.map((c) => this.normalizeCenter(c)).filter(Boolean) : []
+            };
+            this.centerPermissions[String(userId)] = rule;
+            this.saveCenterPermissions();
+            return rule;
+        } catch (error) {
+            console.warn('API list user center access unavailable:', error.message);
+            return this.getUserCenterRule(userId);
+        }
+    }
+
+    async refreshAllCenterPermissions() {
+        await Promise.all((this.users || []).map((user) => this.refreshUserCenterRule(user.id)));
+        return this.centerPermissions;
+    }
+
+    async refreshCurrentUserCenterRule() {
+        const userId = this.core?.currentUser?.id;
+        if (!getAuthHeaders().Authorization || !userId) return this.getUserCenterRule(userId);
+        try {
+            const response = await fetch(`${getApiBase()}/api/center-access/me`, {
+                headers: {
+                    'Content-Type': 'application/json',
+                    ...getAuthHeaders()
+                }
+            });
+            if (!response.ok) {
+                console.warn('API current center access failed:', response.status);
+                return this.getUserCenterRule(userId);
+            }
+            const data = await response.json().catch(() => ({}));
+            const item = data?.item || {};
+            const rule = {
+                mode: item.mode === 'allow' ? 'allow' : 'all',
+                centers: Array.isArray(item.centers) ? item.centers.map((c) => this.normalizeCenter(c)).filter(Boolean) : []
+            };
+            this.centerPermissions[String(userId)] = rule;
+            this.saveCenterPermissions();
+            return rule;
+        } catch (error) {
+            console.warn('API current center access unavailable:', error.message);
+            return this.getUserCenterRule(userId);
+        }
     }
 
     async updateUserCompanies(userId, companies) {
@@ -5252,15 +5383,16 @@ class AdminManager {
     }
 
     saveUsers() {
-        localStorage.setItem(this.core.storageKeys.USERS, JSON.stringify(this.users));
+        window.DMF_CONTEXT.usuarios = this.users;
+        window.DMF_BRAIN.usuarios = this.users;
     }
 
     saveRoles() {
-        localStorage.setItem(this.core.storageKeys.ROLES, JSON.stringify(this.roles));
+        return this.roles;
     }
 
     saveCenterPermissions() {
-        localStorage.setItem(this.core.storageKeys.COST_CENTER_RULES, JSON.stringify(this.centerPermissions || {}));
+        window.DMF_CONTEXT.centerPermissions = this.centerPermissions;
     }
 
     normalizeCenter(center) {
@@ -5275,17 +5407,35 @@ class AdminManager {
         return this.centerPermissions[String(userId)] || { mode: 'all', centers: [] };
     }
 
-    setUserCenterRule(userId, rule) {
+    async setUserCenterRule(userId, rule) {
         const normalizedCenters = Array.isArray(rule.centers)
             ? rule.centers.map(c => this.normalizeCenter(c)).filter(Boolean)
             : [];
-        this.centerPermissions[String(userId)] = {
+        const payload = {
             mode: rule.mode === 'allow' ? 'allow' : 'all',
             centers: Array.from(new Set(normalizedCenters))
         };
-        this.saveCenterPermissions();
-        window.DMF_CONTEXT.centerPermissions = this.centerPermissions;
-        this.core.audit.log('ATUALIZAÇÃO CENTROS', `Permissões de centro atualizadas para usuário ${userId}.`);
+        try {
+            const response = await fetch(`${getApiBase()}/api/users/${userId}/center-access`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                    ...getAuthHeaders()
+                },
+                body: JSON.stringify(payload)
+            });
+            if (!response.ok) {
+                console.warn('API update user center access failed:', response.status);
+                return false;
+            }
+            this.centerPermissions[String(userId)] = payload;
+            this.saveCenterPermissions();
+            this.core.audit.log('ATUALIZAÇÃO CENTROS', `Permissões de centro atualizadas para usuário ${userId}.`);
+            return true;
+        } catch (error) {
+            console.warn('API update user center access unavailable:', error.message);
+            return false;
+        }
     }
 
     canSignCenter(user, center) {
@@ -5380,16 +5530,15 @@ class AdminManager {
             return;
         }
 
-        const newUser = {
+        await this.refreshUsersFromApi();
+        const newUser = this.users.find(u => Number(u.id) === Number(apiUser.id)) || {
             id: Number(apiUser.id),
             nome: apiUser.name || nome,
             usuario: apiUser.username,
             email: apiUser.email,
-            senha: hash(senha),
+            senha: null,
             cargo
         };
-        this.users.push(newUser);
-        this.saveUsers();
         window.DMF_CONTEXT.usuarios = this.users;
         console.log('DMF_CONTEXT after createUser:', window.DMF_CONTEXT);
         this.core.audit.log('CRIAÇÃO USUÁRIO', `Usuário ${newUser.nome} criado com cargo ${cargo}.`);
@@ -5587,7 +5736,7 @@ class AdminManager {
         }
     }
 
-    createRoleFromModal() {
+    async createRoleFromModal() {
         if (!this.requireAdmin()) return;
         setFormFeedback('createRoleFeedback', '');
         const form = document.getElementById('createRoleForm');
@@ -5634,10 +5783,13 @@ class AdminManager {
             name,
             permissions
         };
-        this.roles.push(newRole);
-        this.saveRoles();
+        const saved = await this.upsertRoleToApi(newRole);
+        if (!saved) {
+            setFormFeedback('createRoleFeedback', 'Falha ao criar cargo no servidor.', 'error', 'Não foi possível criar o cargo');
+            return;
+        }
+        await this.refreshRolesFromApi();
         this.core.audit.log('CRIAÇÃO CARGO', `Cargo ${name} criado com permissões: ${permissions.join(', ')}.`);
-        this.upsertRoleToApi(newRole);
         this.sendRoleEvent('create', newRole);
         setFormFeedback('createRoleFeedback', 'Cargo criado com sucesso.', 'ok', 'Tudo certo');
         this.core.ui.closeModal('createRoleModal');
@@ -5645,28 +5797,34 @@ class AdminManager {
         form.reset();
     }
 
-    updateRole(id, updates) {
+    async updateRole(id, updates) {
         if (!this.requireAdmin()) return;
         const role = this.roles.find(r => r.id === id);
         if (role) {
             Object.assign(role, updates);
             this.saveRoles();
             this.core.audit.log('ATUALIZAÇÃO CARGO', `Cargo ${role.name} atualizado. Permissões: ${(role.permissions || []).join(', ')}`);
-            this.upsertRoleToApi(role);
+            await this.upsertRoleToApi(role);
+            await this.refreshRolesFromApi();
             this.sendRoleEvent('update', role);
         }
     }
 
-    deleteRole(id) {
+    async deleteRole(id) {
         if (!this.requireAdmin()) return;
         const role = this.roles.find(r => r.id === id);
+        if (role?.name) {
+            const deleted = await this.deleteRoleFromApi(role.name);
+            if (!deleted) {
+                alert('Erro ao excluir cargo.');
+                return;
+            }
+        }
         this.roles = this.roles.filter(r => r.id !== id);
         this.saveRoles();
+        await this.refreshRolesFromApi();
         this.core.audit.log('EXCLUSÃO CARGO', `Cargo ${role?.name || id} excluído.`);
         if (role) this.sendRoleEvent('delete', role);
-        if (role?.name) {
-            this.deleteRoleFromApi(role.name);
-        }
     }
 
     getRolePermissions(roleName) {
@@ -7614,7 +7772,7 @@ function initDomBindings() {
 
     const saveBudgetsButton = document.getElementById('btnSaveBudgets');
     if (saveBudgetsButton) {
-        saveBudgetsButton.addEventListener('click', function () {
+        saveBudgetsButton.addEventListener('click', async function () {
             const isAdmin = system?.admin?.hasPermission?.(system?.currentUser, 'admin_access');
             if (!isAdmin) {
                 alert('Somente admin pode salvar orçamentos.');
@@ -7625,7 +7783,8 @@ function initDomBindings() {
                 JFX: Number(document.getElementById('budgetJFX')?.value || 0),
                 'Real Energy': Number(document.getElementById('budgetReal')?.value || 0)
             };
-            system?.ui?.saveBudgets?.(budgets);
+            const saved = await system?.ui?.saveBudgets?.(budgets);
+            if (!saved) return;
             system?.ui?.renderMonthlyReports?.();
             alert('Orçamentos salvos.');
         });
