@@ -268,6 +268,68 @@ async function ensurePerformanceIndexes() {
   }
 }
 
+async function ensureFlowPaymentsCompositePrimaryKey() {
+  const db = getSequelize();
+  const dialect = String(db.getDialect() || '').toLowerCase();
+  if (dialect !== 'postgres') return;
+
+  // Keep startup repair idempotent so legacy databases self-heal safely.
+  await db.query(`
+    ALTER TABLE flow_payments
+      ADD COLUMN IF NOT EXISTS company TEXT;
+  `);
+
+  await db.query(`
+    UPDATE flow_payments
+    SET company = 'DMF'
+    WHERE company IS NULL OR BTRIM(company) = '';
+  `);
+
+  await db.query(`
+    ALTER TABLE flow_payments
+      ALTER COLUMN company SET DEFAULT 'DMF';
+  `);
+
+  await db.query(`
+    ALTER TABLE flow_payments
+      ALTER COLUMN company SET NOT NULL;
+  `);
+
+  const pkRows = await db.query(
+    `
+      SELECT tc.constraint_name, kcu.column_name, kcu.ordinal_position
+      FROM information_schema.table_constraints tc
+      JOIN information_schema.key_column_usage kcu
+        ON tc.constraint_name = kcu.constraint_name
+       AND tc.table_schema = kcu.table_schema
+      WHERE tc.table_name = 'flow_payments'
+        AND tc.constraint_type = 'PRIMARY KEY'
+      ORDER BY kcu.ordinal_position ASC
+    `,
+    { type: Sequelize.QueryTypes.SELECT }
+  );
+
+  const currentPkName = pkRows[0]?.constraint_name || null;
+  const currentPkCols = pkRows.map(row => String(row.column_name || ''));
+  const hasCanonicalPk =
+    currentPkCols.length === 2 &&
+    currentPkCols[0] === 'company' &&
+    currentPkCols[1] === 'id';
+
+  if (!hasCanonicalPk) {
+    if (currentPkName) {
+      await db.query(`ALTER TABLE flow_payments DROP CONSTRAINT "${currentPkName}";`);
+    }
+    await db.query(`
+      ALTER TABLE flow_payments
+        ADD CONSTRAINT flow_payments_pkey PRIMARY KEY (company, id);
+    `);
+  }
+
+  await db.query('CREATE INDEX IF NOT EXISTS idx_flow_payments_company ON flow_payments(company)');
+  await db.query('CREATE INDEX IF NOT EXISTS idx_flow_payments_company_id ON flow_payments(company, id)');
+}
+
 async function initDb() {
   const db = getSequelize();
   const maxAttempts = Number(process.env.DB_CONNECT_RETRIES || 5);
@@ -294,6 +356,7 @@ async function initDb() {
       BackupSnapshotModel();
       WebhookModel();
       await db.sync();
+      await ensureFlowPaymentsCompositePrimaryKey();
       await ensurePerformanceIndexes();
       await ensureDefaultRoles();
       dbReady = true;
