@@ -242,6 +242,20 @@ function inferToastType(message) {
     return 'info';
 }
 
+async function parseApiErrorPayload(response) {
+    if (!response) return {};
+    try {
+        return await response.clone().json();
+    } catch (_) {
+        try {
+            const text = await response.clone().text();
+            return text ? { error: text } : {};
+        } catch (_) {
+            return {};
+        }
+    }
+}
+
 function notifyUser(message, type = null, ttl = 4500) {
     if (!message) return;
     showToast(message, type || inferToastType(message), ttl);
@@ -790,6 +804,14 @@ class DataProcessor {
                     return false;
                 }
                 if (response.status === 403) {
+                    const payload = await parseApiErrorPayload(response);
+                    if (String(payload?.error || '').toLowerCase().includes('session revoked')) {
+                        showToast('Sua sessão foi encerrada porque esta conta entrou em outro computador.', 'warn', 6500);
+                        setFlowSyncStatus('Sessão encerrada em outro dispositivo. Faça login novamente.', 'warn');
+                        window.dmfLogout?.();
+                        this.resetFlowBackoff();
+                        return false;
+                    }
                     console.warn('Flow payments fetch forbidden');
                     setFlowSyncStatus('Sem permissão para acessar o fluxo.', 'warn');
                     this.resetFlowBackoff();
@@ -2928,6 +2950,17 @@ class UIManager {
                     return;
                 }
                 if (response.status === 403) {
+                    const payload = await parseApiErrorPayload(response);
+                    if (String(payload?.error || '').toLowerCase().includes('session revoked')) {
+                        showToast('Sua sessão foi encerrada porque esta conta entrou em outro computador.', 'warn', 6500);
+                        this.auth?.logout?.();
+                        return;
+                    }
+                    if (String(payload?.error || '').toLowerCase().includes('user not found')) {
+                        showToast('Sua conta não está mais disponível. Faça login novamente.', 'warn', 6500);
+                        this.auth?.logout?.();
+                        return;
+                    }
                     this.userStatusCooldownUntil = Date.now() + 2 * 60 * 1000;
                     return;
                 }
