@@ -734,6 +734,15 @@ class DataProcessor {
 
     async loadFromBackend(force = false, companyOverride = null, allowRefresh = true) {
         const company = this.normalizeCompany(companyOverride || this.currentCompany);
+        const allowedCompanies = Array.isArray(this.core?.ui?.allowedCompanies) ? this.core.ui.allowedCompanies : [];
+        if (allowedCompanies.length && !allowedCompanies.includes(company)) {
+            const fallback = allowedCompanies[0];
+            if (fallback && fallback !== company) {
+                this.setCurrentCompany(fallback);
+            }
+            setFlowSyncStatus('Empresa não liberada para esta conta.', 'warn');
+            return false;
+        }
         const now = Date.now();
         if (this.flowFetchInFlight) return false;
         if (!force) {
@@ -1813,10 +1822,12 @@ class UIManager {
         this.userStatusInFlight = false;
         this.userStatusLastAt = 0;
         this.userStatusMinInterval = 60000;
+        this.userStatusCooldownUntil = 0;
         this.sessionRefreshInFlight = false;
         this.lastSessionRefreshAt = 0;
         this.sessionRefreshMinInterval = 120000;
         this.companyFilter = 'DMF';
+        this.allowedCompanies = [];
         this.selectedArchiveId = null;
         this.archiveCollapsedById = {};
         this.flowSyncIntervalMs = 3000;
@@ -2052,9 +2063,7 @@ class UIManager {
         }
 
         if (viewId === 'admin') {
-            this.core.admin.refreshUsersFromApi().then(() => {
-                this.renderUsersTable();
-            });
+            this.renderAdminContent();
         }
 
         if (viewId === 'assistente') {
@@ -2075,9 +2084,18 @@ class UIManager {
         if (viewId === 'payments') {
             const company = activeButton?.getAttribute?.('data-company');
             if (company) {
-                this.setCompanyFilter(company);
-                this.core.data.setCurrentCompany(company);
-                this.core.data.loadFromBackend(true, company).then(() => {
+                const normalizedCompany = this.normalizeCompany(company);
+                if (!this.canAccessCompany(normalizedCompany)) {
+                    showToast('Você não tem permissão para acessar essa empresa.', 'warn');
+                    const firstAllowed = this.getFirstAvailableCompanyButton();
+                    if (firstAllowed && firstAllowed !== activeButton) {
+                        this.navigate('payments', firstAllowed);
+                    }
+                    return;
+                }
+                this.setCompanyFilter(normalizedCompany);
+                this.core.data.setCurrentCompany(normalizedCompany);
+                this.core.data.loadFromBackend(true, normalizedCompany).then(() => {
                     this.renderPaymentsTable();
                     this.updateStats();
                 });
@@ -2567,18 +2585,22 @@ class UIManager {
 
         this.setDashboardSkeleton(true);
         this.setPaymentsSkeleton(true);
-        this.refreshCompanyAccessUi().then(() => Promise.all([
-            this.core.admin.refreshCurrentUserCenterRule?.(),
-            this.refreshBudgetsFromApi?.()
-        ])).then(() => this.loadInitialDashboardData()).then(() => {
+        const bootTasks = [];
+        if (this.core.admin.hasPermission(this.core.currentUser, 'admin_access')) {
+            bootTasks.push(this.refreshBudgetsFromApi?.());
+        }
+        this.refreshCompanyAccessUi().then(() => Promise.all(bootTasks)).then(() => this.loadInitialDashboardData()).then(() => {
             this.renderPaymentsTable();
             this.updateStats();
             this.initCharts();
             this.refreshDashboardStats();
-            this.core.data.loadCenterCompanyOverridesFromBackend().then(() => {
-                this.renderCompanyTotals();
-                this.renderCenterCompanyEditor();
-            });
+            this.renderCompanyTotals();
+            if (this.core.admin.hasPermission(this.core.currentUser, 'admin_access')) {
+                this.core.data.loadCenterCompanyOverridesFromBackend().finally(() => {
+                    this.renderCompanyTotals();
+                    this.renderCenterCompanyEditor();
+                });
+            }
         }).finally(() => {
             this.setDashboardSkeleton(false);
             this.setPaymentsSkeleton(false);
@@ -2586,9 +2608,10 @@ class UIManager {
         this.startBackendStatusMonitor();
         this.startSessionMonitor();
         this.startDashboardSummaryAutoRefresh();
-        this.renderAdminContent();
         this.applyRolePermissions();
-        this.populateBudgetInputs();
+        if (this.core.admin.hasPermission(this.core.currentUser, 'admin_access')) {
+            this.populateBudgetInputs();
+        }
         this.initQuickActions();
         this.initPaymentsFilters();
         this.initBatchActions();
@@ -2599,18 +2622,28 @@ class UIManager {
     }
 
     async fetchAllowedCompanies() {
-        if (!getAuthHeaders().Authorization) return ['DMF', 'JFX', 'Real Energy'];
+        const fallbackFromSession = Array.isArray(this.core?.currentUser?.allowedCompanies) &&
+            this.core.currentUser.allowedCompanies.length
+            ? this.core.currentUser.allowedCompanies.map((c) => this.normalizeCompany(c)).filter(Boolean)
+            : [];
+        if (!getAuthHeaders().Authorization) {
+            return fallbackFromSession.length ? Array.from(new Set(fallbackFromSession)) : ['DMF'];
+        }
         try {
             const response = await fetch(`${getApiBase()}/api/companies`, {
                 cache: 'no-store',
                 headers: { ...getAuthHeaders() }
             });
-            if (!response.ok) return ['DMF', 'JFX', 'Real Energy'];
+            if (!response.ok) {
+                return fallbackFromSession.length ? Array.from(new Set(fallbackFromSession)) : ['DMF'];
+            }
             const data = await response.json().catch(() => ({}));
             const companies = Array.isArray(data?.companies) ? data.companies.map((c) => this.normalizeCompany(c)).filter(Boolean) : [];
-            return companies.length ? Array.from(new Set(companies)) : ['DMF', 'JFX', 'Real Energy'];
+            return companies.length
+                ? Array.from(new Set(companies))
+                : (fallbackFromSession.length ? Array.from(new Set(fallbackFromSession)) : ['DMF']);
         } catch (_) {
-            return ['DMF', 'JFX', 'Real Energy'];
+            return fallbackFromSession.length ? Array.from(new Set(fallbackFromSession)) : ['DMF'];
         }
     }
 
@@ -2637,6 +2670,27 @@ class UIManager {
         return allowedCompanies;
     }
 
+    canAccessCompany(company) {
+        const normalized = this.normalizeCompany(company);
+        const allowedCompanies = Array.isArray(this.allowedCompanies) && this.allowedCompanies.length
+            ? this.allowedCompanies
+            : (Array.isArray(this.core?.currentUser?.allowedCompanies)
+                ? this.core.currentUser.allowedCompanies.map((c) => this.normalizeCompany(c)).filter(Boolean)
+                : []);
+        if (!allowedCompanies.length) return true;
+        return allowedCompanies.includes(normalized);
+    }
+
+    getFirstAllowedCompany() {
+        if (Array.isArray(this.allowedCompanies) && this.allowedCompanies.length) {
+            return this.allowedCompanies[0];
+        }
+        const sessionAllowed = Array.isArray(this.core?.currentUser?.allowedCompanies)
+            ? this.core.currentUser.allowedCompanies.map((c) => this.normalizeCompany(c)).filter(Boolean)
+            : [];
+        return sessionAllowed[0] || 'DMF';
+    }
+
     getFirstAvailableCompanyButton() {
         const buttons = Array.from(document.querySelectorAll('[data-nav="payments"][data-company]'));
         return buttons.find((btn) => !btn.classList.contains('hidden') && !btn.disabled) || buttons[0] || null;
@@ -2654,6 +2708,9 @@ class UIManager {
                 if (persisted) company = this.normalizeCompany(persisted);
             }
         } catch (_) {}
+        if (!this.canAccessCompany(company)) {
+            company = this.getFirstAllowedCompany();
+        }
         this.core.data.setCurrentCompany(company);
         this.setCompanyFilter(company);
 
@@ -2849,6 +2906,7 @@ class UIManager {
     async syncCurrentUserRole() {
         const now = Date.now();
         if (this.userStatusInFlight) return;
+        if (now < this.userStatusCooldownUntil) return;
         if (now - this.userStatusLastAt < this.userStatusMinInterval) return;
         this.userStatusInFlight = true;
         this.userStatusLastAt = now;
@@ -2862,6 +2920,14 @@ class UIManager {
                 }
             });
             if (!response.ok) {
+                if (response.status === 429) {
+                    this.userStatusCooldownUntil = Date.now() + 5 * 60 * 1000;
+                    return;
+                }
+                if (response.status === 403) {
+                    this.userStatusCooldownUntil = Date.now() + 2 * 60 * 1000;
+                    return;
+                }
                 if (response.status === 401) {
                     const refreshed = await tryRefreshUserSession();
                     if (refreshed) {
@@ -2974,6 +3040,9 @@ class UIManager {
             this.flowStreamReconnectTimer = null;
         }
         const company = this.core?.data?.currentCompany || this.companyFilter || 'DMF';
+        if (!this.canAccessCompany(company)) {
+            return;
+        }
         const url = `${getApiBase()}/api/flow-payments/stream?company=${encodeURIComponent(company)}`;
         try {
             this.flowEventSource = new EventSource(url, { withCredentials: true });
@@ -3121,29 +3190,33 @@ class UIManager {
     }
 
     renderAdminContent() {
-        if (this.core.admin.hasPermission(this.core.currentUser, 'admin_access')) {
+        const canAdminAccess = this.core.admin.hasPermission(this.core.currentUser, 'admin_access');
+        const canManageUsers = this.core.admin.hasPermission(this.core.currentUser, 'user_manage');
+        const canManageRoles = this.core.admin.hasPermission(this.core.currentUser, 'roles_manage');
+        if (canManageUsers) {
             this.core.admin.refreshUsersFromApi().then(() => {
                 this.core.admin.refreshAllCenterPermissions().finally(() => {
                     this.renderCenterPermissions();
                 });
                 this.renderUsersTable();
             });
-            if (isAdminUser(this.core.currentUser)) {
-                this.core.admin.refreshActiveSessionsFromApi().then(() => {
-                    this.renderActiveSessionsTable();
-                });
-            } else {
+        } else {
+            this.renderUsersTable();
+            this.renderCenterPermissions();
+        }
+        if (isAdminUser(this.core.currentUser) && canAdminAccess) {
+            this.core.admin.refreshActiveSessionsFromApi().then(() => {
                 this.renderActiveSessionsTable();
-            }
+            });
+        } else {
+            this.renderActiveSessionsTable();
+        }
+        if (canManageRoles) {
             this.core.admin.refreshRolesFromApi().then(() => {
                 this.renderRolesTable();
             });
         } else {
-            this.renderUsersTable();
-        }
-        this.renderRolesTable();
-        if (!this.core.admin.hasPermission(this.core.currentUser, 'admin_access')) {
-            this.renderCenterPermissions();
+            this.renderRolesTable();
         }
     }
 
@@ -3182,7 +3255,15 @@ class UIManager {
         const paymentsActionsWrap = paymentsActionsToggle?.closest('.inline-actions-menu') || null;
         const sessionsTabButton = document.getElementById('adminSessionsTabButton');
         const sessionsTab = document.getElementById('sessionsTab');
-        const canManageActiveSessions = isAdminUser(this.core.currentUser);
+        const canManageActiveSessions = isAdminUser(this.core.currentUser) && isAdminAccess;
+        const canManageUsers = this.core.admin.hasPermission(this.core.currentUser, 'user_manage');
+        const canManageRoles = this.core.admin.hasPermission(this.core.currentUser, 'roles_manage');
+        const usersTabButton = document.querySelector('[data-admin-tab="users"]');
+        const centersTabButton = document.querySelector('[data-admin-tab="centers"]');
+        const rolesTabButton = document.querySelector('[data-admin-tab="roles"]');
+        const usersTab = document.getElementById('usersTab');
+        const centersTab = document.getElementById('centersTab');
+        const rolesTab = document.getElementById('rolesTab');
         const syncActionsMenuVisibility = (wrap, toggle, menu) => {
             if (!toggle || !menu) return;
             const hasVisibleAction = Array
@@ -3294,11 +3375,42 @@ class UIManager {
         if (sessionsTab) {
             sessionsTab.classList.toggle('hidden', !canManageActiveSessions);
         }
-        if (!canManageActiveSessions) {
+        if (usersTabButton) {
+            usersTabButton.classList.toggle('hidden', !canManageUsers);
+            usersTabButton.disabled = !canManageUsers;
+        }
+        if (usersTab) {
+            usersTab.classList.toggle('hidden', !canManageUsers);
+        }
+        if (centersTabButton) {
+            centersTabButton.classList.toggle('hidden', !canManageUsers);
+            centersTabButton.disabled = !canManageUsers;
+        }
+        if (centersTab) {
+            centersTab.classList.toggle('hidden', !canManageUsers);
+        }
+        if (rolesTabButton) {
+            rolesTabButton.classList.toggle('hidden', !canManageRoles);
+            rolesTabButton.disabled = !canManageRoles;
+        }
+        if (rolesTab) {
+            rolesTab.classList.toggle('hidden', !canManageRoles);
+        }
+        if (!canManageActiveSessions || !canManageUsers || !canManageRoles) {
             const currentActiveAdminTab = document.querySelector('.admin-tabs .tab-btn.active');
-            if (currentActiveAdminTab && currentActiveAdminTab.getAttribute('data-admin-tab') === 'sessions') {
-                const fallbackButton = document.querySelector('[data-admin-tab="users"]');
-                this.switchAdminTab('users', fallbackButton);
+            if (currentActiveAdminTab) {
+                const currentTab = currentActiveAdminTab.getAttribute('data-admin-tab');
+                const allowedTabs = [
+                    canManageUsers ? 'users' : null,
+                    canManageActiveSessions ? 'sessions' : null,
+                    canManageRoles ? 'roles' : null,
+                    canManageUsers ? 'centers' : null
+                ].filter(Boolean);
+                if (!allowedTabs.includes(currentTab)) {
+                    const fallbackTab = allowedTabs[0] || 'users';
+                    const fallbackButton = document.querySelector(`[data-admin-tab="${fallbackTab}"]`);
+                    this.switchAdminTab(fallbackTab, fallbackButton);
+                }
             }
         }
     }
@@ -3900,6 +4012,10 @@ class UIManager {
     }
 
     async refreshBudgetsFromApi() {
+        if (!this.core.admin.hasPermission(this.core.currentUser, 'admin_access')) {
+            this.budgets = {};
+            return this.loadBudgets();
+        }
         if (!getAuthHeaders().Authorization) return this.loadBudgets();
         try {
             const response = await fetch(`${getApiBase()}/api/budgets`, {
