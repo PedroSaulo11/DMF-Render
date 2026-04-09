@@ -180,6 +180,28 @@ function buildMonthlyPaymentReport(rows, monthKey) {
   };
 }
 
+async function backfillFlowPaymentHistoryFromCurrentFlows(importedBy = 'system_backfill') {
+  if (!isDbReady()) return { count: 0, companies: [] };
+
+  const touchedCompanies = [];
+  let total = 0;
+
+  for (const company of DEFAULT_COMPANIES_UNIQUE) {
+    const payments = await listFlowPayments(company);
+    if (!payments.length) continue;
+    const upserted = await upsertFlowPaymentHistory(payments, company, importedBy);
+    total += upserted;
+    touchedCompanies.push(company);
+  }
+
+  logger.info('Flow payment history backfilled', {
+    count: total,
+    companies: touchedCompanies
+  });
+
+  return { count: total, companies: touchedCompanies };
+}
+
 function envFlag(name, fallback = false) {
   const raw = process.env[name];
   if (raw === undefined || raw === null || raw === '') return !!fallback;
@@ -3889,6 +3911,16 @@ app.post(
       created_at: p.created_at || new Date(),
       updated_at: p.updated_at || new Date()
     })));
+    await upsertFlowPaymentHistory(payments.map(p => ({
+      id: String(p.id),
+      company: normalizeCompany(p.company) || 'DMF',
+      fornecedor: p.fornecedor || 'N/A',
+      data: p.data || null,
+      descricao: p.descricao || '',
+      valor: Number(p.valor) || 0,
+      centro: p.centro || '',
+      categoria: p.categoria || ''
+    })), null, req.user?.username || 'restore');
 
     await replaceFlowArchives(archives.map(a => ({
       id: String(a.id),
@@ -3947,6 +3979,7 @@ async function initializeDatabaseAndRuntime() {
       } else {
         logger.info('Database schema validated');
       }
+      await backfillFlowPaymentHistoryFromCurrentFlows();
       await ensureBootstrapAdmin();
       await loadTokensFromDb();
       await ensureFlowPubSubSubscription();
