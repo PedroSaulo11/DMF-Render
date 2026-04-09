@@ -31,9 +31,7 @@ const {
   upsertServiceToken,
   listFlowPayments,
   getFlowPaymentsStats,
-  listFlowPaymentHistoryByMonth,
   replaceFlowPayments,
-  upsertFlowPaymentHistory,
   upsertFlowPayment,
   updateFlowPaymentWithVersion,
   updateFlowPayment,
@@ -178,28 +176,6 @@ function buildMonthlyPaymentReport(rows, monthKey) {
     categories: sortTotals(overallCategories),
     centers: sortTotals(overallCenters)
   };
-}
-
-async function backfillFlowPaymentHistoryFromCurrentFlows(importedBy = 'system_backfill') {
-  if (!isDbReady()) return { count: 0, companies: [] };
-
-  const touchedCompanies = [];
-  let total = 0;
-
-  for (const company of DEFAULT_COMPANIES_UNIQUE) {
-    const payments = await listFlowPayments(company);
-    if (!payments.length) continue;
-    const upserted = await upsertFlowPaymentHistory(payments, company, importedBy);
-    total += upserted;
-    touchedCompanies.push(company);
-  }
-
-  logger.info('Flow payment history backfilled', {
-    count: total,
-    companies: touchedCompanies
-  });
-
-  return { count: total, companies: touchedCompanies };
 }
 
 function envFlag(name, fallback = false) {
@@ -2227,27 +2203,30 @@ app.get('/api/payment-reports/monthly', authenticateToken, authorizeRole('user')
       companies = scoped;
     }
 
-    let rows = await listFlowPaymentHistoryByMonth(monthKey, companies);
-    if (!rows.length) {
-      const currentRows = [];
-      for (const company of companies) {
-        const payments = await listFlowPayments(company);
-        const matching = payments.filter((payment) => {
-          const raw = String(payment?.data || '').trim();
-          if (!raw) return false;
-          const date = new Date(raw.includes('/') ? raw.split('/').reverse().join('-') : raw);
-          if (Number.isNaN(date.getTime())) return false;
-          const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
-          return key === monthKey;
-        });
-        currentRows.push(...matching.map((payment) => ({
-          company: normalizeCompany(payment.company || company) || company,
+    const allowed = new Set(companies.map((company) => normalizeCompany(company)).filter(Boolean));
+    const archives = await listFlowArchives();
+    const rows = [];
+
+    for (const archive of archives) {
+      const archiveCompany = normalizeCompany(archive?.company) || 'DMF';
+      if (allowed.size && !allowed.has(archiveCompany)) continue;
+
+      const payments = Array.isArray(archive?.payments) ? archive.payments : [];
+      for (const payment of payments) {
+        const raw = String(payment?.data || '').trim();
+        if (!raw) continue;
+        const date = new Date(raw.includes('/') ? raw.split('/').reverse().join('-') : raw);
+        if (Number.isNaN(date.getTime())) continue;
+        const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+        if (key !== monthKey) continue;
+
+        rows.push({
+          company: normalizeCompany(payment.company || archiveCompany) || archiveCompany,
           categoria: payment.categoria || '',
           centro: payment.centro || '',
           valor: payment.valor || 0
-        })));
+        });
       }
-      rows = currentRows;
     }
 
     return res.json(buildMonthlyPaymentReport(rows, monthKey));
@@ -2329,7 +2308,6 @@ app.post(
     }
     const normalized = Array.from(dedup.values());
     await replaceFlowPayments(normalized, company);
-    await upsertFlowPaymentHistory(normalized, company, req.user?.username || null);
     await recordAuditEvent(req, normalized.length ? 'FLOW_IMPORT' : 'FLOW_CLEAR', `Fluxo ${company} importado (${normalized.length} registros).`, {
       company,
       count: normalized.length
@@ -3911,16 +3889,6 @@ app.post(
       created_at: p.created_at || new Date(),
       updated_at: p.updated_at || new Date()
     })));
-    await upsertFlowPaymentHistory(payments.map(p => ({
-      id: String(p.id),
-      company: normalizeCompany(p.company) || 'DMF',
-      fornecedor: p.fornecedor || 'N/A',
-      data: p.data || null,
-      descricao: p.descricao || '',
-      valor: Number(p.valor) || 0,
-      centro: p.centro || '',
-      categoria: p.categoria || ''
-    })), null, req.user?.username || 'restore');
 
     await replaceFlowArchives(archives.map(a => ({
       id: String(a.id),
@@ -3979,7 +3947,6 @@ async function initializeDatabaseAndRuntime() {
       } else {
         logger.info('Database schema validated');
       }
-      await backfillFlowPaymentHistoryFromCurrentFlows();
       await ensureBootstrapAdmin();
       await loadTokensFromDb();
       await ensureFlowPubSubSubscription();
