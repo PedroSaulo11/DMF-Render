@@ -441,7 +441,9 @@ class DMFSystem {
             window.DMF_CONTEXT.usuarioLogado = this.currentUser;
             console.log('DMF_CONTEXT after checkSession:', window.DMF_CONTEXT);
             this.ui.setupDashboard();
+            return;
         }
+        this.ui.showLogin();
     }
 }
 
@@ -2086,6 +2088,7 @@ class UIManager {
     showLogin() {
         document.getElementById('appSection').classList.add('hidden');
         document.getElementById('loginSection').classList.remove('hidden');
+        setBootLoading(false);
         window.omniAssistant?.setVisible?.(false);
         setupLoginVisualEffects();
         refreshLoginRuntimeStatus().catch(() => {});
@@ -2549,6 +2552,7 @@ class UIManager {
         teardownLoginVisualEffects();
         document.getElementById('loginSection').classList.add('hidden');
         document.getElementById('appSection').classList.remove('hidden');
+        setBootLoading(false);
         window.omniAssistant?.setVisible?.(true);
         const role = normalizeRole(this.core.currentUser && (this.core.currentUser.cargo || this.core.currentUser.role));
         if (this.core.currentUser) this.core.currentUser.cargo = role;
@@ -7316,6 +7320,13 @@ function setupLoginVisualEffects() {
 
 function teardownLoginVisualEffects() {
     return;
+}
+
+function setBootLoading(isLoading) {
+    const splash = document.getElementById('appBootSplash');
+    if (!splash) return;
+    splash.classList.toggle('hidden', !isLoading);
+    document.body.classList.toggle('app-booting', !!isLoading);
 }
 
 // Event listeners for modal forms

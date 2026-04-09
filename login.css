@@ -1,3 +1,77 @@
+.app-booting {
+    overflow: hidden;
+}
+
+.app-boot-splash {
+    position: fixed;
+    inset: 0;
+    z-index: 1200;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    background:
+        radial-gradient(120% 80% at 10% 15%, rgba(76, 154, 255, 0.35) 0%, rgba(76, 154, 255, 0) 60%),
+        radial-gradient(120% 80% at 90% 20%, rgba(0, 82, 204, 0.32) 0%, rgba(0, 82, 204, 0) 60%),
+        radial-gradient(120% 80% at 50% 85%, rgba(0, 212, 170, 0.24) 0%, rgba(0, 212, 170, 0) 60%),
+        linear-gradient(135deg, var(--primary) 0%, var(--primary-light) 50%, var(--primary-dark) 100%);
+    transition: opacity 0.2s ease, visibility 0.2s ease;
+}
+
+.app-boot-splash.hidden {
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+}
+
+.app-boot-splash-card {
+    width: min(100%, 420px);
+    display: grid;
+    justify-items: center;
+    gap: 14px;
+    padding: 36px 32px;
+    border-radius: 24px;
+    background: rgba(255, 255, 255, 0.94);
+    box-shadow: 0 32px 64px rgba(0, 0, 0, 0.22), 0 16px 32px rgba(0, 0, 0, 0.12);
+    text-align: center;
+}
+
+.app-boot-logo {
+    width: 68px;
+    height: 68px;
+    border-radius: 18px;
+    background: #fff;
+    padding: 6px;
+    object-fit: contain;
+    box-shadow: 0 10px 24px rgba(13, 82, 196, 0.16);
+}
+
+.app-boot-title {
+    font-size: 34px;
+    font-weight: 800;
+    color: #0f172a;
+    letter-spacing: -0.02em;
+}
+
+.app-boot-subtitle {
+    color: #5f6f85;
+    font-size: 14px;
+}
+
+.app-boot-loader {
+    width: 52px;
+    height: 52px;
+    border-radius: 50%;
+    border: 4px solid rgba(13, 82, 196, 0.14);
+    border-top-color: var(--primary);
+    animation: appBootSpin 0.9s linear infinite;
+}
+
+@keyframes appBootSpin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
 .login-screen .btn-primary {
     transition: transform 0.2s ease, box-shadow 0.2s ease;
 }
