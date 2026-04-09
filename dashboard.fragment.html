@@ -1,100 +1,62 @@
 <div class="card dashboard-card">
-                <h2>Visão Geral Financeira</h2>
-                <div class="dashboard-summary">
-                    <div class="summary-left">
-                        <div class="summary-title">Resumo do dia</div>
-                        <div id="nextActionText" class="summary-action">Tudo certo. Nenhum pendente.</div>
-                        <div class="summary-meta">Pendentes: <span id="pendingCount">0</span></div>
-                    </div>
-                <div class="summary-actions">
-                    <button id="btnQuickImport" class="btn btn-primary">Importar</button>
-                    <div class="inline-actions-menu">
-                        <button id="btnQuickActionsToggle" class="btn btn-ghost" type="button" aria-expanded="false">Mais ações</button>
-                        <div id="btnQuickActionsMenu" class="actions-menu hidden">
-                            <button id="btnQuickExport" class="btn btn-ghost" type="button">Exportar XLSX</button>
-                            <button id="btnQuickPending" class="btn btn-ghost" type="button">Ver Pendentes</button>
-                            <button id="btnQuickAddPayment" class="btn btn-ghost" type="button">Novo Pagamento</button>
-                        </div>
-                    </div>
+    <h2>Visão Geral Financeira</h2>
+    <div class="dashboard-summary">
+        <div class="summary-left">
+            <div class="summary-title">Resumo do dia</div>
+            <div id="nextActionText" class="summary-action">Tudo certo. Nenhum pendente.</div>
+            <div class="summary-meta">Pendentes: <span id="pendingCount">0</span></div>
+        </div>
+        <div class="summary-actions">
+            <button id="btnQuickImport" class="btn btn-primary">Importar</button>
+            <div class="inline-actions-menu">
+                <button id="btnQuickActionsToggle" class="btn btn-ghost" type="button" aria-expanded="false">Mais ações</button>
+                <div id="btnQuickActionsMenu" class="actions-menu hidden">
+                    <button id="btnQuickExport" class="btn btn-ghost" type="button">Exportar XLSX</button>
+                    <button id="btnQuickPending" class="btn btn-ghost" type="button">Ver Pendentes</button>
+                    <button id="btnQuickAddPayment" class="btn btn-ghost" type="button">Novo Pagamento</button>
                 </div>
             </div>
-                <div class="stats-grid dashboard-stats">
-                    <div class="stat-card">
-                        <div class="stat-title">Total Bruto</div>
-                        <div class="stat-value" id="totalBruto">R$ 0,00</div>
-                        <div class="stat-meta" id="totalBrutoMeta">Empresas liberadas</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-title">Assinados</div>
-                        <div class="stat-value" id="totalAssinados">0</div>
-                        <div class="stat-meta">Pagamentos validados</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-title">Aguardando</div>
-                        <div class="stat-value" id="totalPendentes">0</div>
-                        <div class="stat-meta">Pendentes de assinatura</div>
-                    </div>
-                </div>
-                <div id="dashboardCompanyBreakdown" class="company-totals dashboard-company-breakdown">
-                    <div class="company-totals-header">Totais liberados por empresa</div>
-                    <div id="dashboardCompanyBreakdownBody" class="company-totals-body"></div>
-                </div>
-                <div class="chart-panel">
-                    <canvas id="financeChart" height="100"></canvas>
-                </div>
-                <div class="ops-panels">
-                    <div class="ops-panel">
-                        <h4>Saúde do Sistema</h4>
-                        <div class="ops-grid">
-                            <div class="ops-item"><span>API</span><strong id="healthApi">—</strong></div>
-                            <div class="ops-item"><span>Banco</span><strong id="healthDb">—</strong></div>
-                            <div class="ops-item"><span>Redis</span><strong id="healthRedis">—</strong></div>
-                            <div class="ops-item"><span>Auth</span><strong id="healthAuth">—</strong></div>
-                        </div>
-                        <div id="healthUpdated" class="ops-updated">Última verificação: —</div>
-                    </div>
-                    <div class="ops-panel">
-                        <h4>Prioridades de Hoje</h4>
-                        <div id="dueAlertsSummary" class="ops-updated">Sem alertas</div>
-                        <div id="dueAlertsList" class="ops-list"></div>
-                    </div>
-                </div>
+        </div>
+    </div>
+    <div class="stats-grid dashboard-stats">
+        <div class="stat-card">
+            <div class="stat-title">Total Bruto</div>
+            <div class="stat-value" id="totalBruto">R$ 0,00</div>
+            <div class="stat-meta" id="totalBrutoMeta">Empresas liberadas</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-title">Assinados</div>
+            <div class="stat-value" id="totalAssinados">0</div>
+            <div class="stat-meta">Pagamentos validados</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-title">Aguardando</div>
+            <div class="stat-value" id="totalPendentes">0</div>
+            <div class="stat-meta">Pendentes de assinatura</div>
+        </div>
+    </div>
+    <div id="dashboardCompanyBreakdown" class="company-totals dashboard-company-breakdown">
+        <div class="company-totals-header">Totais liberados por empresa</div>
+        <div id="dashboardCompanyBreakdownBody" class="company-totals-body"></div>
+    </div>
+    <div class="chart-panel">
+        <canvas id="financeChart" height="100"></canvas>
+    </div>
+    <div class="ops-panels">
+        <div class="ops-panel">
+            <h4>Saúde do Sistema</h4>
+            <div class="ops-grid">
+                <div class="ops-item"><span>API</span><strong id="healthApi">—</strong></div>
+                <div class="ops-item"><span>Banco</span><strong id="healthDb">—</strong></div>
+                <div class="ops-item"><span>Redis</span><strong id="healthRedis">—</strong></div>
+                <div class="ops-item"><span>Auth</span><strong id="healthAuth">—</strong></div>
             </div>
-            <div class="card dashboard-card">
-                <div class="flex-header">
-                    <h2>Relatórios Mensais</h2>
-                    <div class="actions">
-                        <input type="month" id="reportMonth" class="styled-input">
-                        <button id="btnReportRefresh" class="btn btn-primary">Atualizar</button>
-                    </div>
-                </div>
-                <div class="reports-grid">
-                    <div>
-                        <h4>Totais por Empresa</h4>
-                        <div id="reportCompanyTotals" class="report-list"></div>
-                    </div>
-                    <div>
-                        <h4>Top Centros de Custo</h4>
-                        <div id="reportCostCenters" class="report-list"></div>
-                    </div>
-                </div>
-                <div id="budgetSection" class="budget-section">
-                    <h4>Alertas de Orçamento</h4>
-                    <div class="budget-inputs">
-                        <div class="form-group">
-                            <label for="budgetDMF">DMF (R$)</label>
-                            <input type="number" id="budgetDMF" class="styled-input" min="0" step="0.01">
-                        </div>
-                        <div class="form-group">
-                            <label for="budgetJFX">JFX (R$)</label>
-                            <input type="number" id="budgetJFX" class="styled-input" min="0" step="0.01">
-                        </div>
-                        <div class="form-group">
-                            <label for="budgetReal">Real Energy (R$)</label>
-                            <input type="number" id="budgetReal" class="styled-input" min="0" step="0.01">
-                        </div>
-                        <button id="btnSaveBudgets" class="btn btn-ghost">Salvar Orçamentos</button>
-                    </div>
-                    <div id="budgetAlerts" class="budget-alerts"></div>
-                </div>
-            </div>
+            <div id="healthUpdated" class="ops-updated">Última verificação: —</div>
+        </div>
+        <div class="ops-panel">
+            <h4>Prioridades de Hoje</h4>
+            <div id="dueAlertsSummary" class="ops-updated">Sem alertas</div>
+            <div id="dueAlertsList" class="ops-list"></div>
+        </div>
+    </div>
+</div>

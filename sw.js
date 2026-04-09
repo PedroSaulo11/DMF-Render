@@ -1,7 +1,7 @@
 /* Minimal SW to enable installability.
    Never cache /api/* responses (auth + sensitive). */
 
-const SW_VERSION = '20260227-f15';
+const SW_VERSION = '20260409-f16';
 const CACHE_NAME = `dmf-static-${SW_VERSION}`;
 
 const PRECACHE = [
@@ -13,6 +13,7 @@ const PRECACHE = [
   '/assistant.js',
   '/assistant.css',
   '/dashboard.fragment.html',
+  '/reports.fragment.html',
   '/payments.fragment.html',
   '/audit.fragment.html',
   '/admin.fragment.html',

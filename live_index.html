@@ -51,6 +51,7 @@
         </div>
         <nav class="sidebar-nav">
             <button class="btn-side active" data-nav="dashboard">Dashboard</button>
+            <button class="btn-side" data-nav="reports">Relatório De Pagamentos</button>
             <button id="btnPaymentsToggle" class="btn-side btn-side-toggle" type="button" aria-expanded="false">
                 <span>Fluxo de Pagamentos</span>
                 <span id="paymentsToggleIcon" class="toggle-icon" aria-hidden="true"></span>
@@ -73,6 +74,7 @@
     <main class="main-content">
         <section id="accessDenied" class="view hidden"></section>
         <section id="dashboard" class="view" data-fragment="dashboard.fragment.html"></section>
+        <section id="reports" class="view hidden" data-fragment="reports.fragment.html"></section>
 
         <section id="payments" class="view hidden" data-fragment="payments.fragment.html"></section>
 
@@ -130,6 +132,7 @@
         <span class="close" data-close-modal="createRoleModal">&times;</span>
         <h3>Criar Novo Cargo</h3>
         <form id="createRoleForm">
+            <div id="createRoleFeedback" class="form-feedback-card hidden" role="alert" aria-live="polite"></div>
             <div class="form-group">
                 <label for="roleName">Nome do Cargo:</label>
                 <input type="text" id="roleName" name="roleName" required>
@@ -234,6 +237,7 @@
         <span class="close" data-close-modal="editUserModal">&times;</span>
         <h3>Editar Usuário</h3>
         <form id="editUserForm">
+            <div id="editUserFeedback" class="form-feedback-card hidden" role="alert" aria-live="polite"></div>
             <input type="hidden" id="editUserId" name="editUserId">
             <div class="form-group">
                 <label for="editUserName">Nome:</label>
@@ -266,6 +270,7 @@
         <h3>Trocar Senha</h3>
         <p>Alterando senha para: <strong id="changePasswordUserName"></strong></p>
         <form id="changePasswordForm">
+            <div id="changePasswordFeedback" class="form-feedback-card hidden" role="alert" aria-live="polite"></div>
             <input type="hidden" id="changePasswordUserId" name="changePasswordUserId">
             <div class="form-group">
                 <label for="newPassword">Nova Senha:</label>

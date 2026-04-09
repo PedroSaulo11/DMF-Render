@@ -1825,6 +1825,7 @@ class UIManager {
         this.dashboardSyncTimer = null;
         this.pendingCenterCompanyUpdates = new Map();
         this.budgets = {};
+        this.paymentReport = null;
         this.signatureIdCollapsed = localStorage.getItem('dmf_signature_id_collapsed') !== 'false';
         this.paymentFilterStoragePrefix = 'dmf_payment_filters';
         this.selectedPaymentIds = new Set();
@@ -2056,6 +2057,11 @@ class UIManager {
 
         if (viewId === 'assistente') {
             window.assistant?.init?.();
+        }
+
+        if (viewId === 'reports') {
+            this.renderMonthlyReports();
+            this.populateBudgetInputs();
         }
 
         if (viewId === 'payments') {
@@ -2564,7 +2570,6 @@ class UIManager {
             this.renderPaymentsTable();
             this.updateStats();
             this.initCharts();
-            this.renderMonthlyReports();
             this.refreshDashboardStats();
             this.core.data.loadCenterCompanyOverridesFromBackend().then(() => {
                 this.renderCompanyTotals();
@@ -2686,7 +2691,6 @@ class UIManager {
                 if (!ok) return;
                 this.updateStats();
                 this.refreshDashboardStats();
-                this.renderMonthlyReports();
                 this.updateFlowStatusBadges();
             }).catch(() => {});
         };
@@ -2707,7 +2711,7 @@ class UIManager {
         const tab = String(params.get('tab') || '').trim().toLowerCase();
         if (!tab) return;
 
-        const allowed = new Set(['dashboard', 'payments', 'audit', 'admin', 'assistente', 'cobli']);
+        const allowed = new Set(['dashboard', 'reports', 'payments', 'audit', 'admin', 'assistente', 'cobli']);
         if (!allowed.has(tab)) return;
 
         if (tab === 'payments') {
@@ -3932,25 +3936,117 @@ class UIManager {
         }
     }
 
-    renderMonthlyReports() {
+    formatCurrency(value) {
+        return `R$ ${Number(value || 0).toLocaleString('pt-BR', {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2
+        })}`;
+    }
+
+    renderReportList(targetId, items, emptyText = 'Nenhum dado no período.') {
+        const container = document.getElementById(targetId);
+        if (!container) return;
+        const safeItems = Array.isArray(items) ? items : [];
+        container.innerHTML = safeItems.length
+            ? safeItems.map((item) => `
+                <div class="report-item">
+                    <span>${item.name}</span>
+                    <strong>${this.formatCurrency(item.total)}</strong>
+                </div>
+            `).join('')
+            : `<div class="report-empty">${emptyText}</div>`;
+    }
+
+    renderReportCompanyCards(companies) {
+        const container = document.getElementById('reportCompanyCards');
+        if (!container) return;
+        const safeCompanies = Array.isArray(companies) ? companies : [];
+        container.innerHTML = safeCompanies.length
+            ? safeCompanies.map((company) => `
+                <article class="report-company-card">
+                    <div class="report-company-card-header">
+                        <div>
+                            <h4>${company.company}</h4>
+                            <p>${company.count} pagamento(s) importado(s) no mês</p>
+                        </div>
+                        <strong>${this.formatCurrency(company.total)}</strong>
+                    </div>
+                    <div class="reports-grid report-company-breakdown">
+                        <div>
+                            <h5>Categorias</h5>
+                            <div class="report-list">
+                                ${(company.categories || []).length
+                                    ? company.categories.map((item) => `
+                                        <div class="report-item">
+                                            <span>${item.name}</span>
+                                            <strong>${this.formatCurrency(item.total)}</strong>
+                                        </div>
+                                    `).join('')
+                                    : '<div class="report-empty">Sem categorias no período.</div>'}
+                            </div>
+                        </div>
+                        <div>
+                            <h5>Centros de Custo</h5>
+                            <div class="report-list">
+                                ${(company.centers || []).length
+                                    ? company.centers.map((item) => `
+                                        <div class="report-item">
+                                            <span>${item.name}</span>
+                                            <strong>${this.formatCurrency(item.total)}</strong>
+                                        </div>
+                                    `).join('')
+                                    : '<div class="report-empty">Sem centros no período.</div>'}
+                            </div>
+                        </div>
+                    </div>
+                </article>
+            `).join('')
+            : '<div class="report-empty-card">Nenhum pagamento importado no mês selecionado.</div>';
+    }
+
+    async fetchMonthlyReport(monthKey) {
+        if (!getAuthHeaders().Authorization) return null;
+        try {
+            const response = await fetch(`${getApiBase()}/api/payment-reports/monthly?month=${encodeURIComponent(monthKey)}`, {
+                headers: {
+                    'Content-Type': 'application/json',
+                    ...getAuthHeaders()
+                },
+                cache: 'no-store'
+            });
+            if (!response.ok) {
+                const payload = await response.json().catch(() => ({}));
+                throw new Error(payload?.error || 'Falha ao carregar relatório mensal.');
+            }
+            this.paymentReport = await response.json().catch(() => null);
+            return this.paymentReport;
+        } catch (error) {
+            showToast(error.message || 'Falha ao carregar relatório mensal.', 'warn');
+            return null;
+        }
+    }
+
+    async renderMonthlyReports() {
         const monthKey = this.getSelectedReportMonth();
-        const companyTotals = this.core.data.getCompanyTotalsForMonth(monthKey);
-        const costTotals = this.core.data.getCostCenterTotalsForMonth(monthKey);
-        const companyList = document.getElementById('reportCompanyTotals');
-        const costList = document.getElementById('reportCostCenters');
-        if (companyList) {
-            const items = Object.entries(companyTotals).map(([name, value]) => `
-                <div class="report-item"><span>${name}</span><strong>R$ ${value.toLocaleString('pt-BR')}</strong></div>
-            `).join('');
-            companyList.innerHTML = items || '<div>Nenhum dado no período.</div>';
-        }
-        if (costList) {
-            const sorted = Object.entries(costTotals).sort((a, b) => b[1] - a[1]).slice(0, 8);
-            const items = sorted.map(([name, value]) => `
-                <div class="report-item"><span>${name}</span><strong>R$ ${value.toLocaleString('pt-BR')}</strong></div>
-            `).join('');
-            costList.innerHTML = items || '<div>Nenhum dado no período.</div>';
-        }
+        const report = await this.fetchMonthlyReport(monthKey);
+        if (!report) return;
+
+        const companyTotals = Object.fromEntries((report.companies || []).map((item) => [item.company, Number(item.total || 0)]));
+        this.renderReportList('reportCompanyTotals', (report.companies || []).map((item) => ({ name: item.company, total: item.total })));
+        this.renderReportList('reportCategoryTotals', report.categories || [], 'Nenhuma categoria com gasto no período.');
+        this.renderReportList('reportCostCenters', report.centers || [], 'Nenhum centro de custo com gasto no período.');
+        this.renderReportCompanyCards(report.companies || []);
+
+        const monthTotal = document.getElementById('reportMonthTotal');
+        const categoryCount = document.getElementById('reportCategoryCount');
+        const centerCount = document.getElementById('reportCenterCount');
+        const companyCount = document.getElementById('reportCompanyCount');
+        const companiesSummary = document.getElementById('reportCompaniesSummary');
+        if (monthTotal) monthTotal.textContent = this.formatCurrency(report.summary?.total || 0);
+        if (categoryCount) categoryCount.textContent = String(report.summary?.categoryCount || 0);
+        if (centerCount) centerCount.textContent = String(report.summary?.centerCount || 0);
+        if (companyCount) companyCount.textContent = String(report.summary?.companyCount || 0);
+        if (companiesSummary) companiesSummary.textContent = `${report.summary?.companyCount || 0} empresa(s) com movimento`;
 
         const budgets = this.loadBudgets();
         const budgetDMF = Number(budgets.DMF) || 0;

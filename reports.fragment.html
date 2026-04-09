@@ -1,0 +1,78 @@
+<div class="card reports-page-card">
+    <div class="flex-header reports-header">
+        <h2>Relatório De Pagamentos</h2>
+        <div class="actions reports-actions">
+            <input type="month" id="reportMonth" class="styled-input">
+            <button id="btnReportRefresh" class="btn btn-primary">Atualizar</button>
+        </div>
+    </div>
+    <p class="reports-page-subtitle">
+        Acompanhe quanto cada categoria está gastando por empresa e por centro de custo com base em todos os fluxos de pagamentos importados.
+    </p>
+
+    <div class="stats-grid reports-summary-grid">
+        <div class="stat-card">
+            <div class="stat-title">Total do Mês</div>
+            <div class="stat-value" id="reportMonthTotal">R$ 0,00</div>
+            <div class="stat-meta">Soma de todas as empresas visíveis</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-title">Categorias Ativas</div>
+            <div class="stat-value" id="reportCategoryCount">0</div>
+            <div class="stat-meta">Categorias com movimento no mês</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-title">Centros de Custo</div>
+            <div class="stat-value" id="reportCenterCount">0</div>
+            <div class="stat-meta">Centros com pagamentos importados</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-title">Empresas</div>
+            <div class="stat-value" id="reportCompanyCount">0</div>
+            <div class="stat-meta">Empresas com movimento no mês</div>
+        </div>
+    </div>
+
+    <div class="reports-grid reports-overview-grid">
+        <div>
+            <h4>Totais por Empresa</h4>
+            <div id="reportCompanyTotals" class="report-list"></div>
+        </div>
+        <div>
+            <h4>Top Categorias</h4>
+            <div id="reportCategoryTotals" class="report-list"></div>
+        </div>
+        <div>
+            <h4>Top Centros de Custo</h4>
+            <div id="reportCostCenters" class="report-list"></div>
+        </div>
+    </div>
+
+    <div class="reports-company-section">
+        <div class="reports-company-section-header">
+            <h4>Detalhamento por Empresa</h4>
+            <span id="reportCompaniesSummary" class="report-chip">Sem dados</span>
+        </div>
+        <div id="reportCompanyCards" class="reports-company-cards"></div>
+    </div>
+
+    <div id="budgetSection" class="budget-section">
+        <h4>Alertas de Orçamento</h4>
+        <div class="budget-inputs">
+            <div class="form-group">
+                <label for="budgetDMF">DMF (R$)</label>
+                <input type="number" id="budgetDMF" class="styled-input" min="0" step="0.01">
+            </div>
+            <div class="form-group">
+                <label for="budgetJFX">JFX (R$)</label>
+                <input type="number" id="budgetJFX" class="styled-input" min="0" step="0.01">
+            </div>
+            <div class="form-group">
+                <label for="budgetReal">Real Energy (R$)</label>
+                <input type="number" id="budgetReal" class="styled-input" min="0" step="0.01">
+            </div>
+            <button id="btnSaveBudgets" class="btn btn-ghost">Salvar Orçamentos</button>
+        </div>
+        <div id="budgetAlerts" class="budget-alerts"></div>
+    </div>
+</div>

@@ -147,6 +147,22 @@ const CenterCompanyModel = () => getSequelize().define('app_center_companies', {
   updated_at: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
 }, { timestamps: false, freezeTableName: true });
 
+const FlowPaymentHistoryModel = () => getSequelize().define('flow_payment_history', {
+  payment_id: { type: DataTypes.TEXT, primaryKey: true },
+  company: { type: DataTypes.TEXT, allowNull: false, defaultValue: 'DMF', primaryKey: true },
+  fornecedor: { type: DataTypes.TEXT, allowNull: false },
+  payment_date: { type: DataTypes.TEXT },
+  payment_month: { type: DataTypes.TEXT },
+  descricao: { type: DataTypes.TEXT },
+  valor: { type: DataTypes.DOUBLE },
+  centro: { type: DataTypes.TEXT },
+  categoria: { type: DataTypes.TEXT },
+  imported_by: { type: DataTypes.TEXT },
+  first_imported_at: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
+  last_imported_at: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
+  updated_at: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
+}, { timestamps: false, freezeTableName: true });
+
 const UserCenterAccessModel = () => getSequelize().define('app_user_center_access', {
   user_id: { type: DataTypes.BIGINT, primaryKey: true },
   mode: { type: DataTypes.TEXT, allowNull: false, defaultValue: 'all' },
@@ -166,6 +182,24 @@ function normalizeCenterKey(value) {
 
 function normalizeCenterLabel(value) {
   return String(value || '').trim();
+}
+
+function parsePaymentDate(value) {
+  const raw = String(value || '').trim();
+  if (!raw || raw.toLowerCase() === 'pendente') return null;
+  const iso = new Date(raw);
+  if (!Number.isNaN(iso.getTime())) return iso;
+  const match = raw.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (!match) return null;
+  const [, dd, mm, yyyy] = match;
+  const parsed = new Date(Number(yyyy), Number(mm) - 1, Number(dd));
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function getPaymentMonthKey(value) {
+  const parsed = parsePaymentDate(value);
+  if (!parsed) return null;
+  return `${parsed.getFullYear()}-${String(parsed.getMonth() + 1).padStart(2, '0')}`;
 }
 
 async function registerDiscoveredCenters(items, { transaction = null } = {}) {
@@ -214,6 +248,9 @@ async function ensurePerformanceIndexes() {
   const statements = [
     'CREATE INDEX IF NOT EXISTS idx_flow_payments_company_updated ON flow_payments(company, updated_at DESC)',
     'CREATE INDEX IF NOT EXISTS idx_flow_payments_company_signature ON flow_payments(company, assinatura)',
+    'CREATE INDEX IF NOT EXISTS idx_flow_payment_history_month_company ON flow_payment_history(payment_month, company)',
+    'CREATE INDEX IF NOT EXISTS idx_flow_payment_history_company_category ON flow_payment_history(company, categoria)',
+    'CREATE INDEX IF NOT EXISTS idx_flow_payment_history_company_center ON flow_payment_history(company, centro)',
     'CREATE INDEX IF NOT EXISTS idx_flow_archives_company_created ON flow_archives(company, created_at DESC)',
     'CREATE INDEX IF NOT EXISTS idx_audit_events_created ON audit_events(created_at DESC)',
     'CREATE INDEX IF NOT EXISTS idx_audit_logins_created ON audit_logins(created_at DESC)',
@@ -243,6 +280,7 @@ async function initDb() {
       UserModel();
       TokenModel();
       FlowPaymentModel();
+      FlowPaymentHistoryModel();
       FlowArchiveModel();
       LoginAuditModel();
       AuditEventModel();
@@ -811,6 +849,71 @@ async function getFlowPaymentsStats(companies = null) {
   }));
 }
 
+async function upsertFlowPaymentHistory(payments, company = null, importedBy = null) {
+  const History = FlowPaymentHistoryModel();
+  const items = Array.isArray(payments) ? payments : [];
+  if (!items.length) return 0;
+
+  const now = new Date();
+  const normalizedCompany = normalizeCompany(company) || null;
+  const payload = items.map((payment) => {
+    const scopedCompany = normalizeCompany(payment.company || normalizedCompany) || 'DMF';
+    return {
+      payment_id: String(payment.id || '').trim(),
+      company: scopedCompany,
+      fornecedor: String(payment.fornecedor || 'N/A').trim() || 'N/A',
+      payment_date: payment.data || null,
+      payment_month: getPaymentMonthKey(payment.data),
+      descricao: String(payment.descricao || '').trim(),
+      valor: Number(payment.valor) || 0,
+      centro: String(payment.centro || '').trim(),
+      categoria: String(payment.categoria || '').trim(),
+      imported_by: importedBy || null,
+      first_imported_at: now,
+      last_imported_at: now,
+      updated_at: now
+    };
+  }).filter((item) => item.payment_id);
+
+  if (!payload.length) return 0;
+
+  await History.bulkCreate(payload, {
+    updateOnDuplicate: [
+      'fornecedor',
+      'payment_date',
+      'payment_month',
+      'descricao',
+      'valor',
+      'centro',
+      'categoria',
+      'imported_by',
+      'last_imported_at',
+      'updated_at'
+    ]
+  });
+  return payload.length;
+}
+
+async function listFlowPaymentHistoryByMonth(monthKey, companies = null) {
+  const History = FlowPaymentHistoryModel();
+  const where = {};
+  const normalizedMonth = String(monthKey || '').trim();
+  const list = Array.isArray(companies) ? companies.map(normalizeCompany).filter(Boolean) : null;
+
+  if (normalizedMonth) {
+    where.payment_month = normalizedMonth;
+  }
+  if (list && list.length) {
+    where.company = { [Op.in]: list };
+  }
+
+  const rows = await History.findAll({
+    where,
+    order: [['company', 'ASC'], ['categoria', 'ASC'], ['centro', 'ASC'], ['payment_id', 'ASC']]
+  });
+  return rows.map((row) => row.toJSON());
+}
+
 async function replaceFlowPayments(payments, company = null) {
   const Flow = FlowPaymentModel();
   const db = getSequelize();
@@ -1309,7 +1412,9 @@ module.exports = {
   upsertServiceToken,
   listFlowPayments,
   getFlowPaymentsStats,
+  listFlowPaymentHistoryByMonth,
   replaceFlowPayments,
+  upsertFlowPaymentHistory,
   upsertFlowPayment,
   updateFlowPaymentWithVersion,
   updateFlowPayment,

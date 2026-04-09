@@ -1280,6 +1280,107 @@ tr:hover { background: #f8fbff; }
     margin-top: 12px;
 }
 
+.reports-page-card {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+.reports-header {
+    align-items: center;
+    justify-content: space-between;
+}
+
+.reports-header h2 {
+    margin-bottom: 0;
+}
+
+.reports-page-subtitle {
+    color: var(--text-secondary);
+    margin-top: -10px;
+}
+
+.reports-actions .styled-input {
+    min-width: 180px;
+    margin-bottom: 0;
+}
+
+.reports-summary-grid {
+    margin-top: 0;
+}
+
+.reports-overview-grid {
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
+
+.reports-company-section {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.reports-company-section-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+}
+
+.reports-company-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 16px;
+}
+
+.report-company-card {
+    border: 1px solid rgba(0, 51, 102, 0.08);
+    border-radius: 14px;
+    background: #f8fbff;
+    padding: 18px;
+    box-shadow: 0 8px 20px rgba(0, 82, 204, 0.06);
+}
+
+.report-company-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 16px;
+    margin-bottom: 14px;
+}
+
+.report-company-card-header h4,
+.report-company-breakdown h5 {
+    margin: 0;
+    color: var(--text-primary);
+}
+
+.report-company-card-header p {
+    margin: 4px 0 0;
+    color: var(--text-secondary);
+    font-size: 13px;
+}
+
+.report-company-card-header strong {
+    color: var(--primary-dark);
+    font-size: 18px;
+    white-space: nowrap;
+}
+
+.report-company-breakdown {
+    margin-top: 0;
+}
+
+.report-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 8px 12px;
+    border-radius: 999px;
+    background: rgba(0, 82, 204, 0.08);
+    color: var(--primary-dark);
+    font-size: 13px;
+    font-weight: 600;
+}
+
 .report-list {
     background: #f7f9fc;
     border: 1px solid rgba(0, 51, 102, 0.08);
@@ -1297,6 +1398,19 @@ tr:hover { background: #f8fbff; }
 
 .report-item:last-child {
     border-bottom: none;
+}
+
+.report-empty,
+.report-empty-card {
+    color: var(--text-secondary);
+    font-size: 14px;
+}
+
+.report-empty-card {
+    padding: 18px;
+    border-radius: 12px;
+    border: 1px dashed rgba(0, 51, 102, 0.12);
+    background: #f8fbff;
 }
 
 .budget-section {

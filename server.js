@@ -31,7 +31,9 @@ const {
   upsertServiceToken,
   listFlowPayments,
   getFlowPaymentsStats,
+  listFlowPaymentHistoryByMonth,
   replaceFlowPayments,
+  upsertFlowPaymentHistory,
   upsertFlowPayment,
   updateFlowPaymentWithVersion,
   updateFlowPayment,
@@ -109,6 +111,73 @@ function isStrongPassword(value) {
 
 function passwordPolicyMessage() {
   return 'Senha deve ter no mínimo 8 caracteres, com maiúscula, minúscula, número e símbolo.';
+}
+
+function normalizeCenterLabel(value) {
+  return String(value || '').trim() || 'Sem centro';
+}
+
+function normalizeCategoryLabel(value) {
+  return String(value || '').trim() || 'Sem categoria';
+}
+
+function buildMonthlyPaymentReport(rows, monthKey) {
+  const safeRows = Array.isArray(rows) ? rows : [];
+  const byCompany = new Map();
+  const overallCategories = new Map();
+  const overallCenters = new Map();
+  let total = 0;
+
+  for (const row of safeRows) {
+    const company = normalizeCompany(row.company) || 'DMF';
+    const category = normalizeCategoryLabel(row.categoria);
+    const center = normalizeCenterLabel(row.centro);
+    const amount = Math.abs(Number(row.valor) || 0);
+    const companyEntry = byCompany.get(company) || {
+      company,
+      total: 0,
+      count: 0,
+      categories: new Map(),
+      centers: new Map()
+    };
+
+    companyEntry.total += amount;
+    companyEntry.count += 1;
+    companyEntry.categories.set(category, (companyEntry.categories.get(category) || 0) + amount);
+    companyEntry.centers.set(center, (companyEntry.centers.get(center) || 0) + amount);
+    byCompany.set(company, companyEntry);
+    overallCategories.set(category, (overallCategories.get(category) || 0) + amount);
+    overallCenters.set(center, (overallCenters.get(center) || 0) + amount);
+    total += amount;
+  }
+
+  const sortTotals = (map) => Array.from(map.entries())
+    .map(([name, value]) => ({ name, total: Number(value || 0) }))
+    .sort((a, b) => b.total - a.total || a.name.localeCompare(b.name, 'pt-BR'));
+
+  const companies = Array.from(byCompany.values())
+    .map((item) => ({
+      company: item.company,
+      total: item.total,
+      count: item.count,
+      categories: sortTotals(item.categories),
+      centers: sortTotals(item.centers)
+    }))
+    .sort((a, b) => b.total - a.total || a.company.localeCompare(b.company, 'pt-BR'));
+
+  return {
+    month: monthKey,
+    summary: {
+      total,
+      paymentCount: safeRows.length,
+      companyCount: companies.length,
+      categoryCount: overallCategories.size,
+      centerCount: overallCenters.size
+    },
+    companies,
+    categories: sortTotals(overallCategories),
+    centers: sortTotals(overallCenters)
+  };
 }
 
 function envFlag(name, fallback = false) {
@@ -782,6 +851,7 @@ const PUBLIC_FILES = new Set([
   'cobli.html',
   'login.fragment.html',
   'dashboard.fragment.html',
+  'reports.fragment.html',
   'payments.fragment.html',
   'audit.fragment.html',
   'admin.fragment.html',
@@ -2118,6 +2188,53 @@ app.get('/api/flow-payments/stats', authenticateToken, authorizeRole('user'), as
   }
 });
 
+app.get('/api/payment-reports/monthly', authenticateToken, authorizeRole('user'), async (req, res) => {
+  try {
+    if (!isDbReady()) {
+      return res.status(503).json({ error: 'Database not ready' });
+    }
+
+    const monthKey = String(req.query.month || '').trim();
+    if (!/^\d{4}-\d{2}$/.test(monthKey)) {
+      return res.status(400).json({ error: 'Month must be in YYYY-MM format' });
+    }
+
+    let companies = DEFAULT_COMPANIES_UNIQUE;
+    const scoped = await resolveCompanyAccess(req.user?.id, req.user?.role);
+    if (Array.isArray(scoped) && scoped.length > 0) {
+      companies = scoped;
+    }
+
+    let rows = await listFlowPaymentHistoryByMonth(monthKey, companies);
+    if (!rows.length) {
+      const currentRows = [];
+      for (const company of companies) {
+        const payments = await listFlowPayments(company);
+        const matching = payments.filter((payment) => {
+          const raw = String(payment?.data || '').trim();
+          if (!raw) return false;
+          const date = new Date(raw.includes('/') ? raw.split('/').reverse().join('-') : raw);
+          if (Number.isNaN(date.getTime())) return false;
+          const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+          return key === monthKey;
+        });
+        currentRows.push(...matching.map((payment) => ({
+          company: normalizeCompany(payment.company || company) || company,
+          categoria: payment.categoria || '',
+          centro: payment.centro || '',
+          valor: payment.valor || 0
+        })));
+      }
+      rows = currentRows;
+    }
+
+    return res.json(buildMonthlyPaymentReport(rows, monthKey));
+  } catch (error) {
+    logger.error('Error building monthly payment report', { error: error.message });
+    return res.status(500).json({ error: 'Failed to build monthly payment report' });
+  }
+});
+
 app.get('/api/flow-payments/stream', authenticateTokenFromQuery, authorizeRole('user'), requireCompanyParam, enforceCompanyAccess, (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
   res.setHeader('Cache-Control', 'no-cache, no-transform');
@@ -2190,6 +2307,7 @@ app.post(
     }
     const normalized = Array.from(dedup.values());
     await replaceFlowPayments(normalized, company);
+    await upsertFlowPaymentHistory(normalized, company, req.user?.username || null);
     await recordAuditEvent(req, normalized.length ? 'FLOW_IMPORT' : 'FLOW_CLEAR', `Fluxo ${company} importado (${normalized.length} registros).`, {
       company,
       count: normalized.length
