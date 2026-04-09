@@ -262,7 +262,7 @@ const FEATURE_FLAGS = Object.freeze({
   enable_distributed_rate_limit: envFlag('ENABLE_DISTRIBUTED_RATE_LIMIT', false),
   enable_pubsub_sse: envFlag('ENABLE_PUBSUB_SSE', false),
   enable_strict_api_only_auth: envFlag('ENABLE_STRICT_API_ONLY_AUTH', false),
-  enable_httponly_session: envFlag('ENABLE_HTTPONLY_SESSION', false),
+  enable_httponly_session: envFlag('ENABLE_HTTPONLY_SESSION', process.env.NODE_ENV === 'production'),
 });
 const runtimeStats = {
   conflictsTotal: 0,

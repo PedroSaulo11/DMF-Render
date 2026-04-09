@@ -448,11 +448,10 @@ class DMFSystem {
         }
     }
 
-    checkSession() {
-        const session = localStorage.getItem(this.storageKeys.SESSION);
-        if (session) {
-            this.currentUser = JSON.parse(session);
-            window.DMF_CONTEXT.usuarioLogado = this.currentUser;
+    async checkSession() {
+        setBootLoading(true);
+        const restored = await this.auth.restoreSession();
+        if (restored) {
             console.log('DMF_CONTEXT after checkSession:', window.DMF_CONTEXT);
             this.ui.setupDashboard();
             return;
@@ -463,6 +462,75 @@ class DMFSystem {
 
 class AuthManager {
     constructor(core) { this.core = core; }
+
+    assignSession(user, { persist = true } = {}) {
+        const normalizedCargo = normalizeRole(user.cargo || user.role);
+        const additionalPermissions = Array.isArray(user.additionalPermissions)
+            ? user.additionalPermissions
+            : (Array.isArray(user.permissions) ? user.permissions : []);
+        this.core.currentUser = { ...user, cargo: normalizedCargo, additionalPermissions };
+        if (persist) {
+            localStorage.setItem(this.core.storageKeys.SESSION, JSON.stringify(this.core.currentUser));
+        }
+        window.DMF_CONTEXT.usuarioLogado = this.core.currentUser;
+    }
+
+    async restoreSession() {
+        let persistedUser = null;
+        try {
+            const raw = localStorage.getItem(this.core.storageKeys.SESSION);
+            if (raw) persistedUser = JSON.parse(raw);
+        } catch (_) {
+            persistedUser = null;
+        }
+
+        const hasToken = !!localStorage.getItem('dmf_api_token');
+        if (!persistedUser && !hasToken) {
+            return false;
+        }
+
+        try {
+            const response = await fetch(`${getApiBase()}/api/auth/user-status`, {
+                cache: 'no-store',
+                credentials: 'include',
+                headers: {
+                    'Content-Type': 'application/json',
+                    ...getAuthHeaders()
+                }
+            });
+
+            if (response.ok) {
+                const data = await response.json();
+                if (data?.user) {
+                    this.assignSession({
+                        ...persistedUser,
+                        ...data.user,
+                        cargo: normalizeRole(data.user.role || persistedUser?.cargo),
+                        nome: data.user.name || persistedUser?.nome || '',
+                        additionalPermissions: Array.isArray(data.user.permissions)
+                            ? data.user.permissions
+                            : (persistedUser?.additionalPermissions || [])
+                    });
+                    return true;
+                }
+            }
+
+            if (response.status === 401) {
+                const refreshed = await tryRefreshUserSession();
+                if (refreshed) {
+                    return this.restoreSession();
+                }
+            }
+        } catch (_) {
+            // fall through to cleanup below
+        }
+
+        localStorage.removeItem(this.core.storageKeys.SESSION);
+        localStorage.removeItem('dmf_api_token');
+        this.core.currentUser = null;
+        window.DMF_CONTEXT.usuarioLogado = null;
+        return false;
+    }
 
     async login() {
         const input = document.getElementById('loginInput').value.trim().toLowerCase();
@@ -570,13 +638,7 @@ class AuthManager {
     }
 
     setSession(user) {
-        const normalizedCargo = normalizeRole(user.cargo || user.role);
-        const additionalPermissions = Array.isArray(user.additionalPermissions)
-            ? user.additionalPermissions
-            : (Array.isArray(user.permissions) ? user.permissions : []);
-        this.core.currentUser = { ...user, cargo: normalizedCargo, additionalPermissions };
-        localStorage.setItem(this.core.storageKeys.SESSION, JSON.stringify(this.core.currentUser));
-        window.DMF_CONTEXT.usuarioLogado = this.core.currentUser;
+        this.assignSession(user);
         console.log('DMF_CONTEXT after setSession:', window.DMF_CONTEXT);
         this.core.ui.setupDashboard();
     }
