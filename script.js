@@ -3394,28 +3394,38 @@ class UIManager {
     renderUsersTable() {
         const body = document.getElementById('userGrid');
         if(!body) return;
+        const users = Array.isArray(this.core.admin.users) ? this.core.admin.users : [];
+        const restrictedUsers = users.filter((user) => this.core.admin.getUserCompanies(user.id).length > 0).length;
         body.innerHTML = `
-            <table>
-                <thead>
-                </thead>
-                <tbody>
-                    ${this.core.admin.users.map(u => `
-                        <tr>
-                            <td>${u.nome}</td>
-                            <td>${u.usuario}</td>
-                            <td>${u.email}</td>
-                            <td>${u.cargo}</td>
-                            <td>${this.core.admin.getUserCompaniesSummary(u.id)}</td>
-                            <td>
+            <div class="user-list-shell">
+                <div class="user-list-summary">
+                    <span class="summary-chip">Usuários: ${users.length}</span>
+                    <span class="summary-chip">Com restrição: ${restrictedUsers}</span>
+                </div>
+                <div class="user-list-grid">
+                    ${users.map((u) => `
+                        <article class="user-summary-card">
+                            <div class="user-summary-card-header">
+                                <div class="user-summary-identity">
+                                    <div class="user-summary-name">${u.nome}</div>
+                                    <div class="user-summary-meta">${u.usuario} • ${u.email}</div>
+                                </div>
+                                <span class="user-summary-role">${String(u.cargo || 'user').toUpperCase()}</span>
+                            </div>
+                            <div class="user-summary-companies">
+                                <span class="user-summary-label">Empresas visíveis</span>
+                                <span class="user-summary-badge">${this.core.admin.getUserCompaniesSummary(u.id)}</span>
+                            </div>
+                            <div class="user-summary-actions">
                                 <button class="btn btn-ghost" data-user-action="edit" data-user-id="${u.id}">Editar</button>
                                 <button class="btn btn-ghost" data-user-action="change-password" data-user-id="${u.id}">Trocar Senha</button>
                                 <button class="btn btn-ghost" data-user-action="revoke-session" data-user-id="${u.id}">Revogar Sessão</button>
                                 <button class="btn btn-danger" data-user-action="delete" data-user-id="${u.id}">Excluir</button>
-                            </td>
-                        </tr>
+                            </div>
+                        </article>
                     `).join('')}
-                </tbody>
-            </table>
+                </div>
+            </div>
         `;
         if (!body.dataset.boundUsers) {
             body.addEventListener('click', (event) => {

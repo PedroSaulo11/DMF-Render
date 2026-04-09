@@ -92,8 +92,8 @@ body { background: var(--bg-app); color: var(--text-primary); overflow-x: hidden
     content: '';
     width: 10px;
     height: 10px;
-    border-right: 3px solid rgba(255, 255, 255, 0.95);
-    border-bottom: 3px solid rgba(255, 255, 255, 0.95);
+    border-right: 3px solid currentColor;
+    border-bottom: 3px solid currentColor;
     transform: rotate(-45deg);
     display: block;
     border-radius: 2px;
@@ -2142,6 +2142,109 @@ body {
     flex-wrap: wrap;
 }
 
+.user-list-shell {
+    display: grid;
+    gap: 14px;
+    margin-top: 14px;
+}
+
+.user-list-summary {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.user-list-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 16px;
+}
+
+.user-summary-card {
+    display: grid;
+    gap: 14px;
+    padding: 18px;
+    border-radius: 16px;
+    border: 1px solid rgba(0, 82, 204, 0.12);
+    background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+    box-shadow: 0 6px 14px rgba(0, 30, 84, 0.08);
+}
+
+.user-summary-card-header {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    align-items: flex-start;
+    padding-bottom: 12px;
+    border-bottom: 1px solid rgba(0, 82, 204, 0.1);
+}
+
+.user-summary-identity {
+    min-width: 0;
+}
+
+.user-summary-name {
+    font-size: 20px;
+    font-weight: 700;
+    color: #0f172a;
+}
+
+.user-summary-meta {
+    margin-top: 4px;
+    color: #64748b;
+    font-size: 12px;
+    line-height: 1.5;
+    word-break: break-word;
+}
+
+.user-summary-role {
+    padding: 6px 10px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 700;
+    color: #0d52c4;
+    background: rgba(13, 82, 196, 0.08);
+    border: 1px solid rgba(13, 82, 196, 0.12);
+    white-space: nowrap;
+}
+
+.user-summary-companies {
+    display: grid;
+    gap: 8px;
+}
+
+.user-summary-label {
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    color: #64748b;
+}
+
+.user-summary-badge {
+    display: inline-flex;
+    align-items: center;
+    width: fit-content;
+    max-width: 100%;
+    padding: 8px 12px;
+    border-radius: 999px;
+    font-size: 13px;
+    font-weight: 600;
+    color: #1f2a44;
+    background: #eef2ff;
+    border: 1px solid rgba(0, 51, 102, 0.08);
+}
+
+.user-summary-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.user-summary-actions .btn {
+    flex: 1 1 155px;
+}
+
 .user-company-card-body {
     margin-top: 14px;
 }
@@ -2151,6 +2254,7 @@ body {
 }
 
 .user-company-toggle {
+    width: 100%;
     padding: 0;
     min-height: auto;
     border: 0;
@@ -2268,6 +2372,14 @@ body {
 }
 
 @media (max-width: 900px) {
+    .user-list-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .user-summary-card-header {
+        flex-direction: column;
+    }
+
     .user-company-card-header {
         align-items: flex-start;
     }
