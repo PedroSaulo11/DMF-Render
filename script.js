@@ -505,9 +505,11 @@ class AuthManager {
                 }
                 let apiErrorMessage = 'Falha na autenticação.';
                 try {
-                    const err = await response.json();
+                    const err = await parseApiErrorPayload(response);
                     if (err && typeof err.message === 'string' && err.message.trim()) {
                         apiErrorMessage = err.message.trim();
+                    } else if (err && typeof err.error === 'string' && err.error.trim()) {
+                        apiErrorMessage = err.error.trim();
                     } else if (err?.reason === 'INVALID_PASSWORD') {
                         apiErrorMessage = 'Senha incorreta.';
                     } else if (err?.reason === 'USER_NOT_FOUND') {
@@ -539,7 +541,8 @@ class AuthManager {
             // Verificar usuários armazenados por usuario ou email
             const localUsers = Array.isArray(this.core?.admin?.users) ? this.core.admin.users : [];
             const userByLogin = localUsers.find(u =>
-                (u.usuario === input || u.email === input)
+                (this.core.admin.normalizeUsername(u.usuario || u.username) === input ||
+                 this.core.admin.normalizeEmail(u.email) === input)
             );
             const user = userByLogin && (userByLogin.senha === hash(pass) || userByLogin.senha === pass)
                 ? userByLogin
@@ -5313,7 +5316,7 @@ class AdminManager {
     }
 
     normalizeUsername(username) {
-        return String(username || '').trim();
+        return String(username || '').trim().toLowerCase();
     }
 
     isValidEmail(email) {

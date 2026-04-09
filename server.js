@@ -969,7 +969,7 @@ function syncBootstrapUserToMemory(user) {
 
 async function ensureBootstrapAdmin() {
   const bootstrapEnabled = envFlag('ENABLE_BOOTSTRAP_ADMIN', false);
-  const username = String(process.env.BOOTSTRAP_ADMIN_USERNAME || '').trim();
+  const username = String(process.env.BOOTSTRAP_ADMIN_USERNAME || '').trim().toLowerCase();
   const email = String(process.env.BOOTSTRAP_ADMIN_EMAIL || '').trim().toLowerCase();
   const password = String(process.env.BOOTSTRAP_ADMIN_PASSWORD || '');
   const name = String(process.env.BOOTSTRAP_ADMIN_NAME || 'Administrador').trim() || null;
@@ -1703,7 +1703,7 @@ app.post('/api/auth/register', [
     }
 
     const { username, email, password, role } = req.body;
-    const normalizedUsername = String(username || '').trim();
+    const normalizedUsername = String(username || '').trim().toLowerCase();
     const normalizedEmail = String(email || '').trim().toLowerCase();
     const requestedRole = String(role || '').trim().toLowerCase();
     if (!isStrongPassword(password)) {
@@ -3693,7 +3693,7 @@ app.put('/api/users/:id', authenticateToken, authorizeRole('admin'), authorizePe
     const oldRole = user.role;
 
     const updates = {};
-    if (req.body.username) updates.username = String(req.body.username).trim();
+    if (req.body.username) updates.username = String(req.body.username).trim().toLowerCase();
     if (req.body.email) updates.email = String(req.body.email).trim().toLowerCase();
     if (req.body.role) updates.role = req.body.role;
     if (req.body.name) updates.name = req.body.name;
