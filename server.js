@@ -1879,8 +1879,11 @@ app.post('/api/auth/login', [
     }
     user.last_login = new Date().toISOString();
 
+    let hadOtherActiveSession = false;
     // Generate user access token (legacy body token) and optional HttpOnly session cookies.
     if (isDbReady()) {
+      const activeSessions = await listActiveUserRefreshSessions(1000);
+      hadOtherActiveSession = activeSessions.some((session) => Number(session.user_id) === Number(user.id));
       // Enforce single active session per user across devices.
       // Use a small clock-skew window to avoid revoking the token issued in this same login.
       await setUserSessionRevokedAfter(user.id, new Date(Date.now() - 2000));
@@ -1898,6 +1901,10 @@ app.post('/api/auth/login', [
     res.json({
       message: 'Login successful',
       token,
+      sessionWarning: hadOtherActiveSession ? {
+        code: 'OTHER_SESSION_REVOKED',
+        message: 'Este usuário já estava com uma sessão ativa em outro computador. A sessão anterior foi encerrada.'
+      } : null,
       user: {
         ...sanitizeUserForResponse(user),
         permissions

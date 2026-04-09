@@ -483,6 +483,9 @@ class AuthManager {
                     };
                     localStorage.setItem('dmf_api_token', data.token);
                     this.setSession(apiUser);
+                    if (data.sessionWarning?.message) {
+                        showToast(data.sessionWarning.message, 'warn', 6500);
+                    }
                     setLoginStatus('Login realizado com sucesso.', 'ok');
                     return;
                 }
