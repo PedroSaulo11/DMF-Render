@@ -59,6 +59,8 @@ services:
         value: "true"
       - key: ENABLE_HTTPONLY_SESSION
         value: "false"
+      - key: ENABLE_BOOTSTRAP_ADMIN
+        value: "false"
       - key: BOOTSTRAP_ADMIN_USERNAME
         sync: false
       - key: BOOTSTRAP_ADMIN_EMAIL

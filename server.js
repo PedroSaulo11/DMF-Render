@@ -968,12 +968,17 @@ function syncBootstrapUserToMemory(user) {
 }
 
 async function ensureBootstrapAdmin() {
+  const bootstrapEnabled = envFlag('ENABLE_BOOTSTRAP_ADMIN', false);
   const username = String(process.env.BOOTSTRAP_ADMIN_USERNAME || '').trim();
   const email = String(process.env.BOOTSTRAP_ADMIN_EMAIL || '').trim().toLowerCase();
   const password = String(process.env.BOOTSTRAP_ADMIN_PASSWORD || '');
   const name = String(process.env.BOOTSTRAP_ADMIN_NAME || 'Administrador').trim() || null;
 
   if (!username && !email && !password) return;
+  if (!bootstrapEnabled) {
+    logger.warn('BOOTSTRAP_ADMIN credentials detected but bootstrap is disabled. Set ENABLE_BOOTSTRAP_ADMIN=true only for intentional recovery flows.');
+    return;
+  }
   if (!username || !email || !password) {
     logger.warn('BOOTSTRAP_ADMIN skipped: username, email and password are required together');
     return;
@@ -3997,6 +4002,9 @@ async function startServer() {
       }
       if (!process.env.DATABASE_URL) {
         throw new Error('DATABASE_URL is required in production');
+      }
+      if (!httpOnlySessionEnabled()) {
+        logger.warn('HttpOnly session cookies are disabled in production. Access token fallback in browser storage remains enabled until ENABLE_HTTPONLY_SESSION=true is configured.');
       }
     }
 
