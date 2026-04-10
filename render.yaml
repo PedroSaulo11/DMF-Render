@@ -58,7 +58,7 @@ services:
       - key: ENABLE_STRICT_API_ONLY_AUTH
         value: "true"
       - key: ENABLE_HTTPONLY_SESSION
-        value: "false"
+        value: "true"
       - key: ENABLE_BOOTSTRAP_ADMIN
         value: "false"
       - key: BOOTSTRAP_ADMIN_USERNAME

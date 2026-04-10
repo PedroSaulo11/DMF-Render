@@ -802,6 +802,25 @@ app.use((req, res, next) => {
   next();
 });
 
+// Sensitive endpoints should never be cached by browsers or intermediaries.
+app.use((req, res, next) => {
+  const url = String(req.originalUrl || req.url || '');
+  const sensitivePrefixes = [
+    '/api/auth/',
+    '/api/users',
+    '/api/roles',
+    '/api/audit/',
+    '/api/backup',
+    '/api/ops/metrics'
+  ];
+  if (sensitivePrefixes.some(prefix => url.startsWith(prefix))) {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+  }
+  next();
+});
+
 // Monitoring: request timing and 5xx alerts
 app.use((req, res, next) => {
   opsMetrics.requestsTotal += 1;
