@@ -5810,7 +5810,7 @@ class AdminManager {
         let apiUser = null;
 
         try {
-            const response = await fetch(`${getApiBase()}/api/auth/register`, {
+            const response = await fetch(`${getApiBase()}/api/users`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -5831,6 +5831,9 @@ class AdminManager {
             } else if (response.status === 409) {
                 setFormFeedback('createUserFeedback', 'Usuário ou email já cadastrado.', 'error', 'Não foi possível criar o usuário');
                 return;
+            } else if (response.status === 401 || response.status === 403) {
+                setFormFeedback('createUserFeedback', 'Sem permissão para criar usuários.', 'error', 'Ação não autorizada');
+                return;
             } else {
                 let apiErrorMessage = 'Falha ao criar usuário no servidor. Verifique os dados informados.';
                 try {
@@ -5845,12 +5848,12 @@ class AdminManager {
                 } catch (_) {
                     // ignore non-json responses
                 }
-                console.warn('API register failed:', response.status);
+                console.warn('API create user failed:', response.status);
                 setFormFeedback('createUserFeedback', apiErrorMessage, 'error', 'Não foi possível criar o usuário');
                 return;
             }
         } catch (error) {
-            console.warn('API register unavailable:', error.message);
+            console.warn('API create user unavailable:', error.message);
             setFormFeedback('createUserFeedback', 'Falha ao criar usuário no servidor. Verifique sua conexão e tente novamente.', 'error', 'Erro de comunicação');
             return;
         }

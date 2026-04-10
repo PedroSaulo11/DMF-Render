@@ -3678,6 +3678,105 @@ app.get('/api/users', authenticateToken, authorizeRole('admin'), authorizePermis
   }
 });
 
+// Admin: create user
+app.post('/api/users', authenticateToken, authorizeRole('admin'), authorizePermission('user_manage'), [
+  body('username').isLength({ min: 3, max: 50 }).trim().escape().withMessage('Username must be 3-50 characters'),
+  body('email').isEmail().normalizeEmail().withMessage('Valid email required'),
+  body('password').isLength({ min: 8 }).withMessage('Password must be at least 8 characters'),
+  body('role').optional().custom(isAllowedRole).withMessage('Invalid role'),
+  body('name').optional().isLength({ min: 2, max: 100 }).trim().escape()
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ success: false, errors: errors.array() });
+    }
+
+    if (strictApiOnlyAuthEnabled() && !isDbReady()) {
+      return res.status(503).json({ success: false, error: 'Database not ready' });
+    }
+
+    const normalizedUsername = String(req.body.username || '').trim().toLowerCase();
+    const normalizedEmail = String(req.body.email || '').trim().toLowerCase();
+    const assignedRole = String(req.body.role || 'user').trim().toLowerCase() || 'user';
+    const password = String(req.body.password || '');
+
+    if (!isStrongPassword(password)) {
+      opsMetrics.passwordPolicyRejections += 1;
+      return res.status(400).json({ success: false, error: passwordPolicyMessage() });
+    }
+
+    let existingUser = null;
+    if (isDbReady()) {
+      existingUser = await getUserByUsernameOrEmail(normalizedUsername) || await getUserByUsernameOrEmail(normalizedEmail);
+    } else if (inMemoryUserFallbackEnabled()) {
+      existingUser = users.find(u =>
+        String(u.username || '').toLowerCase() === normalizedUsername ||
+        String(u.email || '').toLowerCase() === normalizedEmail
+      );
+    }
+
+    if (existingUser) {
+      return res.status(409).json({ success: false, error: 'User already exists' });
+    }
+
+    const passwordHash = await bcrypt.hash(password, 12);
+    let createdUser = null;
+
+    if (isDbReady()) {
+      createdUser = await createUser({
+        username: normalizedUsername,
+        email: normalizedEmail,
+        passwordHash,
+        role: assignedRole,
+        name: req.body.name || null
+      });
+    } else if (inMemoryUserFallbackEnabled()) {
+      createdUser = {
+        id: Date.now().toString(),
+        username: normalizedUsername,
+        email: normalizedEmail,
+        password_hash: passwordHash,
+        role: assignedRole,
+        name: req.body.name || null,
+        created_at: new Date().toISOString(),
+        last_login: null
+      };
+      users.push(createdUser);
+    }
+
+    if (!createdUser) {
+      return res.status(500).json({ success: false, error: 'Failed to create user' });
+    }
+
+    const passwordVerified = await bcrypt.compare(password, createdUser.password_hash);
+    if (!passwordVerified) {
+      logger.error('Password verification failed immediately after user creation', {
+        username: normalizedUsername,
+        email: normalizedEmail
+      });
+      return res.status(500).json({ success: false, error: 'Failed to verify created password' });
+    }
+
+    emitEventWebhook('user_created', {
+      userId: createdUser.id,
+      username: createdUser.username,
+      role: createdUser.role,
+      admin: req.user?.username || null
+    });
+
+    await recordAuditEvent(req, 'USER_CREATED', `Usuário ${createdUser.username} criado.`, {
+      targetUserId: createdUser.id,
+      targetUsername: createdUser.username
+    });
+
+    res.status(201).json({ success: true, user: sanitizeUserForResponse(createdUser) });
+  } catch (error) {
+    logger.error('Failed to create user', { error: error.message });
+    res.status(500).json({ success: false, error: 'Failed to create user' });
+  }
+});
+
 // Admin: update user
 app.put('/api/users/:id', authenticateToken, authorizeRole('admin'), authorizePermission('user_manage'), [
   param('id').isInt().withMessage('Valid user ID required'),
